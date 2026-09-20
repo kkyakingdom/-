@@ -1,0 +1,5 @@
+Territory boundary style update v7.3
+- Commandery (군) boundaries now render as solid orange lines.
+- Internal holy-site boundaries within the same commandery now render as dashed pale-gold lines.
+- State boundary cache is retained internally but no longer shown as the main user-facing range style.
+- Legend updated to match the new visual meaning.

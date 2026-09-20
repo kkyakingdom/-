@@ -1,0 +1,54 @@
+S3 STATE BOUNDARY FULL AUDIT v7.5
+=================================
+
+Reference source:
+- Scenario11_S3_region_mapping_217_COMPLETE.csv
+- 217 / 217 region mappings are marked exact.
+- data.js matches all 217 reference mappings: 0 missing, 0 state/commandery/region-name mismatches.
+
+11 states / region counts:
+- 강동 15
+- 강한 38
+- 관중 17
+- 농우 15
+- 산동 15
+- 유연 15
+- 중원 17
+- 파촉 15
+- 하삭 38
+- 형초 15
+- 회남 17
+Total: 217
+
+Root cause of missing state-border segments in v7.4:
+- Tile rendering uses a staggered grid.
+- Odd 0-based X columns (= even in-game X) are shifted downward by +0.5 tile.
+- The old boundary builder still treated the map as a regular square grid and compared a left/right edge only against the same-Y neighboring tile.
+- In the actual staggered grid, one vertical tile edge is shared by two neighboring tiles, one on each half of the edge.
+- Therefore v7.4 could omit or misplace half-edge border segments.
+
+v7.5 boundary rule:
+- Horizontal top/bottom: compare with same-column y-1 / y+1.
+- Vertical left/right edges are split into two 0.5-tile segments.
+- For even 0-based X: upper half neighbor = y-1, lower half neighbor = y.
+- For odd 0-based X: upper half neighbor = y, lower half neighbor = y+1.
+- The same odd/even offset rule is now used by tile rendering, selection outlines, commandery borders, holy-site borders, and state borders.
+
+Hierarchy rendering:
+- State boundary: blue solid line.
+- Commandery boundary inside same state: orange solid line.
+- Holy-site boundary inside same commandery: pale-gold dashed line.
+- Boundary classes are exclusive; a state boundary is not simultaneously rendered as commandery/holy-site boundary.
+
+Topology verification:
+- Full 1500 x 1500 grid checked (2,250,000 tiles).
+- Unique grid region codes: 217.
+- All 217 codes have exact mappings.
+- Stagger-aware state-boundary network internal degree-1 endpoints: 0.
+  (No open/gapped state-border endpoints inside the map.)
+- State-to-state adjacency pairs detected: 24.
+
+Target area used for visual/data audit:
+- 형초: 강릉(0411), 기남(0412), 화용(0413), 경릉(0431), 맥성(0443), 형성(0453)
+- All six are correctly classified as 형초 in the exact 217-region source.
+- Border segments around this area are now generated from stagger-aware adjacency, not square-grid adjacency.

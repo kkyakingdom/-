@@ -1,0 +1,5 @@
+v7.3.1 regression fix
+- Fixed missing commanderyByCode initialization that stopped JS execution and left the map black.
+- Commandery boundaries: solid orange.
+- Holy-site boundaries inside the same commandery: dashed pale-gold.
+- Existing interaction and tile logic preserved.

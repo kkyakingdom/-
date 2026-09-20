@@ -1,0 +1,29 @@
+COMMANDERY BOUNDARY AUDIT v7.6
+
+Exact region rows checked: 217
+commandery_id vs floor(city.map_region_id/100) mismatches: 0
+Boundary grouping now uses commandery_id, NOT the display commandery name.
+
+Reference validation:
+- 형초 남군 ID 401: 강릉 / 기남 / 화용
+- 형초 남군 ID 404: 당양 / 장판 / 맥성
+These are separate commandery groups even though both display as 남군.
+
+Duplicate display names that map to different real commandery groups:
+- 강동 단양군: 603=건업/단양/우호 ; 604=우후/경현/안오
+- 강동 오군: 601=오현/오정/양선 ; 602=구용/무진/운양
+- 중원 하남윤: 901=낙양 ; 903=형양/원무/권현
+- 중원 홍농군: 904=의양/호현/노씨 ; 908=홍농
+- 하삭 위군: 701=업성/거록/신두/무안/돈구 ; 702=탕음/호관/조가
+- 형초 강하군: 403=경릉/양신/오림 ; 405=운두/적벽/형성
+- 형초 남군: 401=강릉/기남/화용 ; 404=당양/장판/맥성
+
+Stagger-aware boundary recount:
+- Old name-based commandery segments: 36,253
+- New ID-based commandery segments: 38,568
+- Recovered commandery boundary segments: 2,315
+
+Existing hierarchy retained:
+- State boundary: blue solid
+- Commandery boundary: orange solid
+- Holy-site/region boundary inside same commandery: pale-gold dashed
