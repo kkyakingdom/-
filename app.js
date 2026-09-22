@@ -247,6 +247,10 @@ const regionsWithCity=regionEntries.filter(([,r])=>r.city && r.city.x!=null && r
 const regionsWithoutCity=regionEntries.filter(([,r])=>!(r.city && r.city.x!=null && r.city.y!=null));
 const map=document.getElementById('map'), ctx=map.getContext('2d');
 const fx=document.getElementById('fx'), fctx=fx.getContext('2d');
+const cachedBaseCanvas=document.createElement('canvas'),cachedBaseCtx=cachedBaseCanvas.getContext('2d');
+let cachedBaseKey='',cachedBaseRevision=0;
+function invalidateBaseCache(){cachedBaseRevision++;cachedBaseKey='';}
+
 // 성능 우선: 화면이 매우 큰 경우 내부 캔버스 해상도를 자동으로 조금 낮춰 드래그/확대 시 렉을 줄인다.
 function computeRenderDpr(){
   const nativeDpr=window.devicePixelRatio||1;
@@ -439,6 +443,16 @@ const allStructures=[
   ...(X.mountainPaths||[]).map(v=>({...v,_type:'mountain_path'})),
   ...(X.fortresses||[]).map(v=>({...v,_type:'fortress'}))
 ];
+// 원본 배열의 첫 번째 시설 우선순위를 보존한 직접 조회 인덱스.
+const STRUCTURES_BY_TILE=new Map(), STRUCTURES_BY_ID=new Map();
+for(const st of allStructures){
+  const offset=(st._type==='bridge'||st._type==='chokepoint'||st._type==='mountain_path')?2:1;
+  const tileKey=`${Math.floor(st.x-offset)},${Math.floor(st.y-offset)}`;
+  if(!STRUCTURES_BY_TILE.has(tileKey)) STRUCTURES_BY_TILE.set(tileKey,st);
+  const idKey=String(st.id);
+  if(!STRUCTURES_BY_ID.has(idKey)) STRUCTURES_BY_ID.set(idKey,st);
+}
+
 
 const off=document.createElement('canvas'); off.width=W; off.height=H; const octx=off.getContext('2d');
 const terrainCanvas=document.createElement('canvas'); terrainCanvas.width=W; terrainCanvas.height=H;
@@ -922,7 +936,8 @@ function routeResultCaution(path){
   const n=routeCityUnverifiedCount(path);
   return n?` · 성지 구역 ${n}칸 포함(내부 이동 및 현재 점령 상태는 별도 확인 필요)`:' · 실시간 점령 상태는 자동 조회하지 않음';
 }
-function routeCacheKey(start,end){return `${start.x},${start.y}>${end.x},${end.y}|perimeter-blocked-v1`;}
+function routeCacheKey(start,end,allowCityPerimeter=false){return `${start.x},${start.y}>${end.x},${end.y}|perimeter-${allowCityPerimeter?'allowed':'blocked'}-v1`;}
+function cachedRoute(key){const hit=routeCache.get(key);if(hit){routeCache.delete(key);routeCache.set(key,hit);}return hit;}
 function cacheRoute(key,res){
   routeCache.delete(key); routeCache.set(key,{path:res.path.map(p=>({x:p.x,y:p.y})),expanded:res.expanded});
   if(routeCache.size>ROUTE_CACHE_MAX) routeCache.delete(routeCache.keys().next().value);
@@ -1175,7 +1190,7 @@ async function calculateCurrentRoute(){
   if(!routeStart||!routeEnd){updateRouteUI('시작지와 목적지를 모두 지정하세요.','error');return;}
   if(!isRoutePassable(routeStart.x,routeStart.y)||!isRoutePassable(routeEnd.x,routeEnd.y)){updateRouteUI('시작지 또는 목적지가 강·산 또는 통행 불가 성문·성벽(성지 외곽)에 있습니다. 다른 좌표를 선택하세요.','error');return;}
   if(routeStart.x===routeEnd.x&&routeStart.y===routeEnd.y){routePath=[{...routeStart}];routeOverlayVisible=true;updateRouteUI('시작지와 목적지가 같은 타일입니다.','done');drawSelection();return;}
-  const key=routeCacheKey(routeStart,routeEnd),cached=routeCache.get(key);
+  const key=routeCacheKey(routeStart,routeEnd),cached=cachedRoute(key);
   if(cached){routePath=cached.path.map(p=>({...p}));routeOverlayVisible=true;updateRouteUI(`저장된 계산 결과 · ${cached.expanded.toLocaleString()}개 타일 탐색${routeResultCaution(routePath)}`,'done');drawSelection();return;}
   routePath=[];routeOverlayVisible=true;routeSearching=true;updateRouteUI('강·산 및 모든 성지 외곽 차단 기준 계산 중…','busy');drawSelection();
   const res=await findShortestRouteAsync(routeStart,routeEnd,n=>{if(routeSearching)updateRouteUI(`최단 경로 계산 중… ${n.toLocaleString()}개 타일 탐색`,'busy');});
@@ -1227,20 +1242,41 @@ function routeTargetFromSearch(kind,key){
     if(r.city?.x!=null&&r.city?.y!=null)return nearestRoutePassable(r.city.x-1,r.city.y-1,10);
     return nearestRoutePassable(Math.floor(r.c[0]),Math.floor(r.c[1]),10);
   }
-  const st=allStructures.find(v=>String(v.id)===String(key));if(!st)return null;
+  const st=STRUCTURES_BY_ID.get(String(key));if(!st)return null;
   const p=structureWorldTile(st);return nearestRoutePassable(p[0],p[1],10);
 }
 function setSearchAsRoute(kind,key,which){
   const t=routeTargetFromSearch(kind,key); if(!t){updateRouteUI('이 위치 주변에서 이동 가능한 타일을 찾지 못했습니다.','error');return;}
   setRouteEndpoint(which,t,{calculate:true}); closeSearchResults(); searchInput.blur();
 }
+// 경로 점 좌표변환 + Path2D 구성은 화면 좌표가 바뀔 때에만 수행한다.
+// WeakMap은 사용자가 기존 경로를 삭제하면 해당 경로 캐시도 GC 가능하도록 한다.
+const ROUTE_SCREEN_PATHS=new WeakMap();
+function routeScreenPath(path){
+  const key=`${scale}|${ox}|${oy}|${map.clientWidth}|${map.clientHeight}`;
+  const hit=ROUTE_SCREEN_PATHS.get(path);
+  if(hit?.key===key&&hit.length===path.length)return hit.result;
+  const result=new Path2D(),w=map.clientWidth,h=map.clientHeight,margin=40;
+  let prior=null,wasVisible=false;
+  for(let i=0;i<path.length;i++){
+    const t=path[i],p=tileCenterToScreen(t.x,t.y);
+    if(prior&&Math.max(prior[0],p[0])>=-margin&&Math.min(prior[0],p[0])<=w+margin &&
+      Math.max(prior[1],p[1])>=-margin&&Math.min(prior[1],p[1])<=h+margin){
+      if(!wasVisible)result.moveTo(prior[0],prior[1]);
+      result.lineTo(p[0],p[1]);wasVisible=true;
+    }else wasVisible=false;
+    prior=p;
+  }
+  ROUTE_SCREEN_PATHS.set(path,{key,length:path.length,result});
+  return result;
+}
 function drawPathLine(path,color='#ff91c7',alpha=1){
   if(!path?.length)return;
   fctx.save(); fctx.globalAlpha=alpha;
   if(path.length>1){
-    fctx.beginPath();
-    path.forEach((t,i)=>{const p=tileCenterToScreen(t.x,t.y);if(i===0)fctx.moveTo(p[0],p[1]);else fctx.lineTo(p[0],p[1]);});
-    fctx.lineJoin='round';fctx.lineCap='round';fctx.strokeStyle='rgba(9,17,27,.97)';fctx.lineWidth=8;fctx.stroke();fctx.strokeStyle=color;fctx.lineWidth=4;fctx.stroke();
+    const screenPath=routeScreenPath(path);
+    fctx.lineJoin='round';fctx.lineCap='round';fctx.strokeStyle='rgba(9,17,27,.97)';fctx.lineWidth=8;fctx.stroke(screenPath);
+    fctx.strokeStyle=color;fctx.lineWidth=4;fctx.stroke(screenPath);
   }
   fctx.restore();
 }
@@ -1278,7 +1314,7 @@ function drawRouteOverlay(){
 function drawMoveCalcOverlay(){
   if(!moveCalcMode&&!moveCalcPath.length)return;
   fctx.save();fctx.setTransform(renderDpr,0,0,renderDpr,0,0);
-  if(moveCalcPath.length>1){fctx.beginPath();moveCalcPath.forEach((t,i)=>{const p=tileCenterToScreen(t.x,t.y);if(!i)fctx.moveTo(...p);else fctx.lineTo(...p);});fctx.setLineDash([7,6]);fctx.strokeStyle='rgba(0,0,0,.86)';fctx.lineWidth=8;fctx.stroke();fctx.strokeStyle='#73f3e8';fctx.lineWidth=4;fctx.stroke();fctx.setLineDash([]);}
+  if(moveCalcPath.length>1){const screenPath=routeScreenPath(moveCalcPath);fctx.setLineDash([7,6]);fctx.strokeStyle='rgba(0,0,0,.86)';fctx.lineWidth=8;fctx.stroke(screenPath);fctx.strokeStyle='#73f3e8';fctx.lineWidth=4;fctx.stroke(screenPath);fctx.setLineDash([]);}
   const m=(t,fill,label)=>{if(!t)return;const p=tileCenterToScreen(t.x,t.y);fctx.beginPath();fctx.arc(p[0],p[1],10,0,Math.PI*2);fctx.fillStyle=fill;fctx.fill();fctx.strokeStyle='#fff';fctx.lineWidth=2;fctx.stroke();fctx.font='900 10px sans-serif';fctx.textAlign='center';fctx.textBaseline='middle';fctx.fillStyle='#123';fctx.fillText(label,p[0],p[1]);};m(moveCalcStart,'#8ff5db','A');m(moveCalcEnd,'#ffd283','B');
   fctx.restore();
 }
@@ -1294,12 +1330,14 @@ function updateMoveCalcUI(message='',kind=''){
 function clearMoveCalc(close=false){moveCalcToken++;moveCalcSearching=false;moveCalcStart=null;moveCalcEnd=null;moveCalcPath=[];if(close)moveCalcMode=false;updateMoveCalcUI();drawSelection();}
 async function calculateMoveTimePath(){
   if(!moveCalcStart||!moveCalcEnd)return;
+  const key=routeCacheKey(moveCalcStart,moveCalcEnd,true),cached=cachedRoute(key);
+  if(cached){moveCalcSearching=false;moveCalcPath=cached.path;updateMoveCalcUI('저장된 계산 결과 · 성지 외곽 통과 허용','done');drawSelection();return;}
   moveCalcSearching=true;updateMoveCalcUI('성지 외곽 통과 허용 기준 최단 이동칸 계산 중…','busy');
   const my=++moveCalcToken;
   const res=await findShortestRouteAsync(moveCalcStart,moveCalcEnd,n=>{if(moveCalcSearching&&my===moveCalcToken)updateMoveCalcUI(`계산 중… ${n.toLocaleString()}개 타일 탐색`,'busy');},{allowCityPerimeter:true});
   if(my!==moveCalcToken||!res)return;moveCalcSearching=false;
   if(res.error||!res.path?.length){moveCalcPath=[];updateMoveCalcUI(res.error||'강·산을 피하는 경로를 찾지 못했습니다.','error');drawSelection();return;}
-  moveCalcPath=res.path;updateMoveCalcUI('계산 완료 · 성지 외곽은 통과 가능으로 계산했습니다.','done');drawSelection();
+  moveCalcPath=res.path;cacheRoute(key,res);updateMoveCalcUI('계산 완료 · 성지 외곽은 통과 가능으로 계산했습니다.','done');drawSelection();
 }
 function moveCalcPickTile(x,y){
   x=Math.floor(x);y=Math.floor(y);if(!isRoutePassable(x,y,true)){updateMoveCalcUI('강·산 타일은 출발지/목적지로 선택할 수 없습니다.','error');return;}
@@ -1369,7 +1407,17 @@ function buildInferredFortresses(){
     if(linked || known.has(`${gx},${gy}`)) continue;
     inferredFortresses.push({id:`raw11_${gx}_${gy}`,name:'성채',x:gx,y:gy,kind:'fortress',_type:'fortress',_inferred:true});
   }
-  if(inferredFortresses.length) allStructures.push(...inferredFortresses);
+  if(inferredFortresses.length){
+    allStructures.push(...inferredFortresses);
+    // 보강된 원본 raw11 성채도 기존 시설 조회/검색의 결과에서 누락하지 않는다.
+    for(const st of inferredFortresses){
+      const tileKey=`${Math.floor(st.x-1)},${Math.floor(st.y-1)}`;
+      if(!STRUCTURES_BY_TILE.has(tileKey))STRUCTURES_BY_TILE.set(tileKey,st);
+      if(!STRUCTURES_BY_ID.has(String(st.id)))STRUCTURES_BY_ID.set(String(st.id),st);
+      STRUCTURE_SEARCH_ROWS.push({st,key:(st.name+' '+st.id).toLowerCase()});
+    }
+    previousSearchQuery='';previousSearchMatches=null;
+  }
   fortressStructures=allStructures.filter(v=>v._type==='fortress');
   console.log('[S3 map] raw11 성채 보강:',inferredFortresses.length,'개 / 총',(X.fortresses||[]).length+inferredFortresses.length);
 }
@@ -1489,6 +1537,7 @@ function commitOverlayBuffers(){
   terrainCtx.putImageData(img,0,0);
   terrainShiftCtx.putImageData(imgShift,0,0);
   terrainNoShiftCtx.putImageData(imgNoShift,0,0);
+  invalidateBaseCache();
   document.getElementById('resourceRenderStatus')?.replaceChildren();
   if(!dragging&&!zoomPreviewActive)scheduleFullDraw();
 }
@@ -1514,7 +1563,7 @@ function buildExactTerrainOverlay(){
   function step(){
     const deadline=performance.now()+7;
     if(initial){
-      const stop=Math.min(W*H,i+W*48);
+      const stop=Math.min(W*H,i+Math.min(W*12,18000));
       for(;i<stop;i++){
         const t=terrainRaw[i],rr=resourceRaw[i],bucket=t===0?bucketIndex(rr&15,rr>>4):-1;
         if(bucket>=0)overlayBucketIndices[bucket].push(i);
@@ -1644,7 +1693,7 @@ function drawTextBadge(g,text,x,y,font,fill='#FFF4D5',opts={}){
   g.font=font; g.textBaseline='middle';
   const cacheKey=font+'\n'+text;
   let tw=textWidthCache.get(cacheKey);
-  if(tw==null){ tw=g.measureText(text).width; textWidthCache.set(cacheKey,tw); }
+  if(tw==null){ tw=g.measureText(text).width; if(textWidthCache.size>4096)textWidthCache.clear(); textWidthCache.set(cacheKey,tw); }
   const size=parseFloat(font.match(/(\d+(?:\.\d+)?)px/)?.[1]||12);
   const bh=size+padY*2, bw=tw+padX*2;
   let bx=x;
@@ -2031,6 +2080,7 @@ function buildBase(){
   octx.clearRect(0,0,W,H);
   if(bgImg.complete) octx.drawImage(bgImg,0,0,W,H);
   octx.putImageData(img,0,0);
+  invalidateBaseCache();
 
   // 경계는 Path2D 오버레이로 그리므로 여기서 225만 픽셀 경계 계산을 반복하지 않음.
 }
@@ -2405,23 +2455,30 @@ function drawMini(){}
 
 function draw(){
   activeWorldView=viewportWorldBounds();
-  const r=map.getBoundingClientRect(), w=r.width, h=r.height;
+  const w=map.clientWidth, h=map.clientHeight;
   for(const c of [ctx,fctx]){
     c.setTransform(renderDpr,0,0,renderDpr,0,0);
     c.clearRect(0,0,w,h);
   }
-  ctx.fillStyle='#0e0a06';
-  ctx.fillRect(0,0,w,h);
-  drawWorldLayer(ctx,off);
-  if(showTerrain && exactTerrainReady){
-    // 배율과 무관하게 동일한 엇갈림 규칙을 사용한다.
-    // 저배율에서만 정사각 raster를 사용하면 확대 경계(6배)에서 타일이 반 칸 튀는 현상이 생긴다.
-    drawOffsetTileTerrain(ctx,true);
+  // 원본 지형/자원 색과 경계가 그대로인 경우에는 이전 화면 합성 결과를 재사용한다.
+  // 화면을 벗어난 원본 좌표는 기존 drawWorldLayerOffset의 클리핑 규칙 그대로 처리한다.
+  const baseKey=[cachedBaseRevision,map.width,map.height,renderDpr,scale,ox,oy,
+    showTerrain,exactTerrainReady,borderMode].join('|');
+  if(cachedBaseKey!==baseKey){
+    if(cachedBaseCanvas.width!==map.width)cachedBaseCanvas.width=map.width;
+    if(cachedBaseCanvas.height!==map.height)cachedBaseCanvas.height=map.height;
+    cachedBaseCtx.setTransform(renderDpr,0,0,renderDpr,0,0);
+    cachedBaseCtx.clearRect(0,0,w,h);
+    cachedBaseCtx.fillStyle='#0e0a06';cachedBaseCtx.fillRect(0,0,w,h);
+    drawWorldLayer(cachedBaseCtx,off);
+    if(showTerrain&&exactTerrainReady)drawOffsetTileTerrain(cachedBaseCtx,true);
+    cachedBaseCtx.fillStyle='rgba(0,0,0,.13)';cachedBaseCtx.fillRect(0,0,w,h);
+    drawTerritoryRanges(cachedBaseCtx);
+    drawHolySitePrevRanges(cachedBaseCtx);
+    drawSpecialTerrainOutline(cachedBaseCtx);
+    cachedBaseKey=baseKey;
   }
-  ctx.fillStyle='rgba(0,0,0,.13)'; ctx.fillRect(0,0,w,h);
-  drawTerritoryRanges(ctx);
-  drawHolySitePrevRanges(ctx);
-  drawSpecialTerrainOutline(ctx);
+  ctx.drawImage(cachedBaseCanvas,0,0,w,h);
   drawS11ConnectionNetwork(ctx);
   drawGyeokmunOccupationLinks(ctx);
   drawAnnotations();
@@ -2447,11 +2504,7 @@ function nearestStructure(x,y,rad=8){
 // 클릭한 타일의 중심 좌표와 정확히 같은 구조물만 현재 타일 정보로 취급한다.
 function structureAtTile(tx,ty){
   tx=Math.floor(tx); ty=Math.floor(ty);
-  for(const s of allStructures){
-    const q=structureWorldTile(s);
-    if(Math.floor(q[0])===tx && Math.floor(q[1])===ty) return s;
-  }
-  return null;
+  return STRUCTURES_BY_TILE.get(`${tx},${ty}`)||null;
 }
 
 // 정철 계산기용 시설 픽커: 지도 좌표가 아니라 실제로 그려진 성지/관문 아이콘 중심의
@@ -2610,14 +2663,22 @@ document.getElementById('info')?.addEventListener('click',async e=>{
   setTimeout(()=>{b.textContent=old;b.classList.remove('copied');},800);
 });
 
+// 색상/자원 데이터와 독립적인 검색 인덱스: 사용자가 입력할 때 문자열 재생성을 방지.
+const REGION_SEARCH_ROWS=regionEntries.map(entry=>({entry,
+  key:(entry[0]+' '+entry[1].f+' '+entry[1].n+' '+entry[1].s+' '+entry[1].m+' '+(entry[1].city?.name||'')).toLowerCase()
+})).sort((a,b)=>a.entry[1].f.localeCompare(b.entry[1].f,'ko'));
+const STRUCTURE_SEARCH_ROWS=allStructures.map(st=>({st,key:(st.name+' '+st.id).toLowerCase()}));
+let previousSearchQuery='',previousSearchMatches=null;
 function getSearchMatches(q){
   q=(q||'').trim().toLowerCase();
   if(!q) return {regions:[],structs:[]};
-  const regions=regionEntries
-    .filter(([code,r])=>{ const city=r.city?.name||''; return (code+' '+r.f+' '+r.n+' '+r.s+' '+r.m+' '+city).toLowerCase().includes(q); })
-    .sort((a,b)=>a[1].f.localeCompare(b[1].f,'ko'));
-  const structs=allStructures.filter(s=>(s.name+' '+s.id).toLowerCase().includes(q));
-  return {regions,structs};
+  if(q===previousSearchQuery&&previousSearchMatches)return previousSearchMatches;
+  const regions=[],structs=[];
+  for(const row of REGION_SEARCH_ROWS)if(row.key.includes(q))regions.push(row.entry);
+  for(const row of STRUCTURE_SEARCH_ROWS)if(row.key.includes(q))structs.push(row.st);
+  previousSearchQuery=q;
+  previousSearchMatches={regions,structs};
+  return previousSearchMatches;
 }
 let searchActiveIndex=-1;
 function closeSearchResults(){
@@ -2634,7 +2695,7 @@ function searchResultAction(kind,key){
     else centerOn(r.c[0],r.c[1],Math.max(scale,1.25));
     updateRecenterButton();
   }else{
-    const s=allStructures.find(v=>String(v.id)===key); if(!s) return;
+    const s=STRUCTURES_BY_ID.get(String(key)); if(!s) return;
     const sw=structureWorldTile(s), code=regionAt(sw[0],sw[1]); searchTargetTile={x:sw[0],y:sw[1]}; selected=code; selectedTile=null;
     updateInfo(code,null,s); centerOnTile(sw[0],sw[1],Math.max(scale,1.8)); updateRecenterButton();
   }
@@ -3005,6 +3066,7 @@ function commitPreview(){
   draw();
 }
 function scheduleFullDraw(){
+  if(dragging||zoomPreviewActive) return;
   if(fullDrawRAF) return;
   fullDrawRAF=requestAnimationFrame(()=>{
     fullDrawRAF=0;
