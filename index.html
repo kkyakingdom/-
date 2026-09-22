@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko"><head><meta name="deployment-build" content="KKYAKINGDOM-WEBMAP-v22.9.22-pin0806"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>S3 업주산하 지도 · 간결한 화면</title><link rel="stylesheet" href="style.css"></head>
+<body class="access-locked">
+<section id="accessGate" class="access-gate" role="dialog" aria-modal="true" aria-labelledby="accessTitle">
+  <form id="accessForm" class="access-card" autocomplete="off">
+    <div class="access-mark" aria-hidden="true">◈</div>
+    <h1 id="accessTitle">Scenario11 웹지도</h1>
+    <p class="access-intro">지도를 열려면 비밀번호를 입력해 주세요.</p>
+    <label for="accessPassword">비밀번호</label>
+    <input id="accessPassword" type="password" inputmode="numeric" maxlength="4" required autocomplete="off" placeholder="비밀번호 4자리" aria-describedby="accessError">
+    <p id="accessError" class="access-error" role="alert" aria-live="polite"></p>
+    <button id="accessSubmit" type="submit">지도 열기</button>
+    <p id="accessLoading" class="access-loading" role="status" hidden>지도를 불러오는 중...</p>
+  </form>
+</section>
+<div id="app"><div id="mapwrap"><canvas id="map"></canvas><canvas id="fx"></canvas>
+<header id="topbar">
+ <div class="top-actions"><div class="searchWrap"><input id="search" aria-label="성지와 지역 검색" placeholder="성지 · 지역 · 군 검색  /" autocomplete="off"><div id="results" class="searchResults" aria-live="polite"></div></div>
+ <button class="btn iconBtn" id="zoomOutBtn" title="축소" aria-label="축소">−</button><button class="btn iconBtn" id="zoomInBtn" title="확대" aria-label="확대">＋</button>
+ <button class="btn" id="fitBtn">전체 보기</button><button class="btn" id="recenterBtn" title="마지막 선택·검색 위치로 이동" disabled>선택 위치</button><button class="btn routeToggleBtn" id="routeToggleBtn" aria-pressed="false">길작 탐색</button><button class="btn" id="moveCalcToggleBtn" aria-pressed="false">이동 시간</button><button type="button" class="btn scoreToggleBtn" id="scoreToggleBtn" aria-pressed="false" aria-controls="scorePanel">패업 점수</button><button type="button" class="btn connectionToggleBtn" id="connectionToggleBtn" aria-pressed="false" title="Scenario11 원본 성지·관문 연결 448개 표시/숨기기">성지 연결</button><button type="button" class="btn gyeokmunToggleBtn" id="gyeokmunToggleBtn" aria-pressed="false" title="지정한 격문 관문과 대천명 성지의 점령 연결 실선 표시/숨기기">격문 점령</button><button type="button" class="btn steelToggleBtn" id="steelToggleBtn" aria-expanded="false" aria-controls="steelPanel" title="지도 아이콘 클릭으로 성지·관문을 추가하고 정철 도달 시각을 계산합니다">정철 계산</button><button class="btn" id="resourceFilterToggleBtn" aria-expanded="false" aria-controls="resourceLegend" title="자원 필터 열기">자원 필터</button><button class="btn" id="landExportToggleBtn" aria-expanded="false" aria-controls="landExportPanel">토지 추출</button><button class="btn" id="panelToggleBtn" aria-expanded="true">정보 접기</button></div>
+</header>
+<button class="btn" id="collapse" aria-expanded="false">정보 / 좌표</button>
+<aside id="leftpanel" aria-label="지도 탐색과 선택 정보">
+ <section class="panel coordPanel"><div class="panelHead"><h2>좌표 이동</h2></div>
+  <div class="coord"><input id="coordInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="예: 837.333" aria-label="좌표 검색"><button class="btn" id="coordBtn">이동</button></div>
+  <div id="coordError" class="coordError" aria-live="polite"></div>
+ </section>
+ <section class="panel" id="info" aria-label="통합 타일 및 선택 정보">
+  <div class="panelHead"><h2>지도 정보</h2></div>
+  <div id="selectionContent"></div>
+ </section>
+ <details class="panel auxDetails counterPanel" open><summary>토지 카운터 <b id="tileCounterCount">0</b>개 · 도구</summary>
+  <div class="tileCounterBar"><label class="tileCounterMode"><input type="checkbox" id="tileCounterModeToggle"><span>토지 카운팅 모드 <b id="tileCounterModeState">OFF</b></span></label><button id="tileCounterReset" type="button">전체 초기화</button></div>
+ </details>
+ <section id="hoverTileInfo" class="panel hoverTilePanel" aria-label="지나가는 타일" aria-live="polite"><span class="hoverTileTitle">지나가는 타일</span><div class="hoverTileGrid"><div class="k">좌표</div><div class="v" id="hoverTileCoord">-</div><div class="k">지형</div><div class="v" id="hoverTileTerrain">-</div></div></section>
+</aside>
+<details id="resourceLegend" class="resourceLegend" aria-label="자원 종류·레벨 설정"><summary>자원 필터 </summary>
+ <div class="resourceLegendBody"><div class="fieldLabel">자원 종류</div>
+  <div class="resourceKinds"><label><input data-resource-kind="1" type="checkbox" checked><span class="dot wood"></span>목재</label><label><input data-resource-kind="2" type="checkbox" checked><span class="dot iron"></span>철광</label><label><input data-resource-kind="3" type="checkbox" checked><span class="dot stone"></span>석재</label><label><input data-resource-kind="4" type="checkbox" checked><span class="dot food"></span>식량</label></div>
+  <div class="fieldLabel">레벨 표시</div><div class="resourceLevelToggles"><label><input id="resourceLowToggle" type="checkbox">1~8</label><label><input id="resourceMidToggle" type="checkbox">9</label><label><input id="resourceHighToggle" type="checkbox">10~12</label></div>
+  <div class="resourceQuickBtns"><button type="button" data-resource-preset="high">10~12만</button><button type="button" data-resource-preset="all">전체 표시</button><button type="button" data-resource-preset="none">자원 숨김</button></div>
+  <label class="resourceSoftDots"><input id="resourceSoftDotsToggle" type="checkbox" checked><span><b>자원 점 연하게</b></span></label>
+  <details id="resourceColorDetails" class="auxDetails"><summary>고급 색상 설정 · <span id="currentResourceColor">레벨별 색상</span></summary>
+   <div class="resourceColorGrid"><button type="button" id="resourceLevelColorMode">레벨별 기본색 복원</button>
+    <button type="button" class="resourceColorPick resourceSample" data-resource-color="#5c804b" style="--resource-color:#5c804b;color:#fff">기존</button>
+    <button type="button" class="resourceColorPick resourceSample" data-resource-color="#d77cff" style="--resource-color:#d77cff">보라</button>
+    <button type="button" class="resourceColorPick resourceSample" data-resource-color="#57f57d" style="--resource-color:#57f57d">연두</button>
+    <button type="button" class="resourceColorPick resourceSample" data-resource-color="#54cdff" style="--resource-color:#54cdff">하늘</button>
+    <button type="button" class="resourceColorPick resourceSample" data-resource-color="#ffd555" style="--resource-color:#ffd555">금색</button>
+    <button type="button" class="resourceColorPick resourceSample" data-resource-color="#ff7d4b" style="--resource-color:#ff7d4b">주황</button>
+   </div></details>
+  <details id="legend" class="auxDetails"><summary>주(州) 범례</summary><div id="legendItems"></div></details>
+  <div id="resourceRenderStatus" class="small" aria-live="polite"></div>
+ </div></details>
+
+<aside id="scorePanel" class="scorePanel" aria-label="연맹별 패업 점수 계산기" hidden>
+ <div class="scorePanelHead"><div><b>패업 점수 계산기</b></div><button type="button" id="scoreCloseBtn" aria-label="패업 점수 계산기 닫기">×</button></div>
+ <div class="scorePanelBody">
+  <div class="scoreAllianceTabs" role="group" aria-label="성지를 지정할 연맹 선택">
+   <button type="button" data-score-alliance="1" aria-pressed="true">연맹 1</button><button type="button" data-score-alliance="2" aria-pressed="false">연맹 2</button><button type="button" data-score-alliance="3" aria-pressed="false">연맹 3</button>
+  </div>
+  <div class="scoreAllSummary" id="scoreAllSummary" aria-live="polite"></div>
+  <div class="scoreCurrentHead"><b id="scoreActiveTitle">연맹 1 점령 성지</b><button type="button" id="scoreClearAllianceBtn">이 연맹 초기화</button></div>
+  <div id="scoreCityList" class="scoreCityList" aria-live="polite"></div>
+  <div class="scorePanelFoot"><button type="button" id="scoreClearAllBtn">전체 초기화</button></div>
+ </div>
+</aside>
+<aside id="landExportPanel" class="landExportPanel" aria-labelledby="landExportPanelTitle" hidden>
+ <div class="landExportHead"><div><b id="landExportPanelTitle">토지 추출</b></div><button type="button" id="landExportCloseBtn" aria-label="토지 추출 닫기">×</button></div>
+ <div class="landExportBody">
+  <div class="landExportStatus" id="landExportStatus">지도에서 성지 아이콘을 클릭해 선택하세요.</div>
+  <div class="landExportSection">
+   <div class="landExportSectionHead"><b>선택 성지</b><span id="landExportCityCount">0곳</span></div>
+   <div id="landExportCityList" class="landExportCityList"><span class="landExportEmpty">선택된 성지가 없습니다.</span></div>
+   <div class="landExportActions"><button type="button" id="landExportClearCitiesBtn">성지 초기화</button></div>
+  </div>
+  <div class="landExportSection">
+   <div class="landExportSectionHead"><b>토지 레벨</b><span>복수 선택</span></div>
+   <div class="landExportLevels" id="landExportLevels"><label><input type="checkbox" data-land-level="1" ><span>1</span></label><label><input type="checkbox" data-land-level="2" ><span>2</span></label><label><input type="checkbox" data-land-level="3" ><span>3</span></label><label><input type="checkbox" data-land-level="4" ><span>4</span></label><label><input type="checkbox" data-land-level="5" ><span>5</span></label><label><input type="checkbox" data-land-level="6" ><span>6</span></label><label><input type="checkbox" data-land-level="7" ><span>7</span></label><label><input type="checkbox" data-land-level="8" ><span>8</span></label><label><input type="checkbox" data-land-level="9" checked><span>9</span></label><label><input type="checkbox" data-land-level="10" checked><span>10</span></label><label><input type="checkbox" data-land-level="11" checked><span>11</span></label><label><input type="checkbox" data-land-level="12" checked><span>12</span></label></div>
+   <div class="landExportQuick"><button type="button" data-land-level-preset="all">전체</button><button type="button" data-land-level-preset="high">9~12</button><button type="button" data-land-level-preset="none">해제</button></div>
+  </div>
+  <div class="landExportResult" id="landExportResult">선택한 성지와 레벨의 자원 토지를 추출합니다.</div>
+  <button type="button" class="landExportDownloadBtn" id="landExportDownloadBtn">엑셀 다운로드</button>
+ </div>
+</aside>
+<aside id="steelPanel" class="steelPanel" aria-labelledby="steelPanelTitle" hidden>
+ <div class="steelPanelHead"><div><b id="steelPanelTitle">⚒ 정철 도달 시각 계산기</b></div><button type="button" id="steelCloseBtn" class="steelCloseBtn" aria-label="정철 계산기 닫기">×</button></div>
+ <div class="steelMobileBar"><span class="steelMuted" id="steelMobileSelectionStatus"></span><button type="button" id="steelShowListBtn">계산 목록 보기</button></div>
+ <div class="steelPanelBody">
+  <div class="steelPickRow"><button type="button" class="steelPickBtn active" id="steelPickBtn" aria-pressed="true">지도 선택 ON</button><span id="steelPickHelp" class="steelMuted" hidden></span></div>
+  <div class="steelNotice" id="steelNotice" role="status" aria-live="polite"></div>
+  <section class="steelSection"><h3>현재 정철 · 생산량</h3><div class="steelInputGrid">
+   <label>보유 정철<input id="steelStock" type="number" min="0" step="1" value="0" inputmode="numeric"></label>
+   <label>시간당 생산량<input id="steelRate" type="number" min="0" step="0.1" value="160" inputmode="decimal"></label>
+   <label>기준 시각<input id="steelBase" type="datetime-local" step="60"></label>
+   <label>점령 후 생산 반영(시간)<input id="steelDelay" type="number" min="0" step="0.25" value="3.5" inputmode="decimal"></label></div>
+   <div class="steelControls"><button type="button" id="steelSetNowBtn">지금으로</button><button type="button" id="steelResetBtn">계산기 초기화</button></div>
+  </section>
+  <details class="steelSection steelTargetsDetails" id="steelTargetsDetails"><summary>공략 순서 · <span class="steelOrderCount" id="steelOrderCount">0곳</span></summary>
+   <div class="steelSectionHead"><button type="button" id="steelClearTargetsBtn">목록 지우기</button></div>
+   <div id="steelTargets" class="steelTargets"><p class="steelEmpty">지도에서 성지 또는 관문 아이콘을 클릭하세요.</p></div>
+  </details>
+  <section class="steelSection steelSummarySection"><h3>정철 도달 예상</h3><div id="steelSummary" class="steelSummary">공략할 성지를 선택하세요.</div></section>
+  <details class="steelSection steelResultsDetails" id="steelResultsDetails"><summary>성지별 상세 계산 결과 보기</summary><div id="steelResults" class="steelResults"></div></details>
+  <details class="steelSection steelForecastDetails"><summary>시간별 정철 예상 · 72시간 보기</summary><div class="steelForecastScroll"><table><thead><tr><th>시각</th><th>보유 정철</th><th>시간당 생산</th><th>이벤트</th></tr></thead><tbody id="steelForecast"></tbody></table></div></details>
+ </div>
+</aside>
+<section id="routePanel" class="routePanel" aria-live="polite">
+ <div class="routePanelHead"><b>최단 경로</b><div class="routeHeadActions"><button type="button" id="routeEditBtn" title="시작지와 목적지 입력창 펼치기" aria-expanded="true">좌표 변경</button><button type="button" id="routeCollapseBtn" title="길작 탐색창 최소화" aria-expanded="true">접기</button><button type="button" id="routeCloseBtn" title="길작 탐색 종료">×</button></div></div>
+ <div id="routeStatus" class="routeStatus">시작 타일을 클릭하거나 좌표를 입력하세요.</div>
+ <div class="routeInputGrid">
+  <label><span>시작지</span><input id="routeStartInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="예: 837.333"></label>
+  <label><span>목적지</span><input id="routeEndInput" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="예: 1177.735"></label>
+ </div>
+ <button type="button" id="routeCalculateBtn" class="routePrimaryBtn">최단 경로 계산</button>
+ <div class="routeCoords">
+  <div><span>시작</span><b id="routeStartCoord">-</b></div>
+  <div><span>목적지</span><b id="routeEndCoord">-</b></div>
+ </div>
+ <div id="routeResult" class="routeResult">경로 타일 수 - · 이동 -</div>
+ <div class="routeTiming"><div class="routeDepartureRow"><span id="routeDepartureLabel">출발 날짜·시간</span><input type="date" id="routeDepartureDate" aria-label="출발 날짜"><span class="routeDepartureClock" role="group" aria-labelledby="routeDepartureLabel"><select id="routeDepartureHour" aria-label="출발 시 (24시간제)"><option value="00">00</option><option value="01">01</option><option value="02">02</option><option value="03">03</option><option value="04">04</option><option value="05">05</option><option value="06">06</option><option value="07">07</option><option value="08">08</option><option value="09">09</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option><option value="15">15</option><option value="16" selected>16</option><option value="17">17</option><option value="18">18</option><option value="19">19</option><option value="20">20</option><option value="21">21</option><option value="22">22</option><option value="23">23</option></select><span class="routeDepartureColon" aria-hidden="true">:</span><select id="routeDepartureMinute" aria-label="출발 분"><option value="00">00</option><option value="01">01</option><option value="02">02</option><option value="03">03</option><option value="04">04</option><option value="05">05</option><option value="06">06</option><option value="07">07</option><option value="08">08</option><option value="09">09</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option><option value="15">15</option><option value="16">16</option><option value="17">17</option><option value="18">18</option><option value="19">19</option><option value="20">20</option><option value="21">21</option><option value="22">22</option><option value="23">23</option><option value="24">24</option><option value="25">25</option><option value="26">26</option><option value="27">27</option><option value="28">28</option><option value="29">29</option><option value="30">30</option><option value="31">31</option><option value="32">32</option><option value="33">33</option><option value="34">34</option><option value="35">35</option><option value="36">36</option><option value="37">37</option><option value="38">38</option><option value="39">39</option><option value="40" selected>40</option><option value="41">41</option><option value="42">42</option><option value="43">43</option><option value="44">44</option><option value="45">45</option><option value="46">46</option><option value="47">47</option><option value="48">48</option><option value="49">49</option><option value="50">50</option><option value="51">51</option><option value="52">52</option><option value="53">53</option><option value="54">54</option><option value="55">55</option><option value="56">56</option><option value="57">57</option><option value="58">58</option><option value="59">59</option></select></span><button type="button" id="routeSetNowBtn" class="routeSetNowBtn">지금으로</button></div>
+ <div class="routeArrival" id="routeArrival" aria-live="polite"></div>
+ <div class="routeTravelDuration" id="routeTravelDuration"></div>
+ </div>
+ <div class="routeActions routeActionsMain">
+  <button type="button" id="routeFitBtn">전체 경로 보기</button><button type="button" id="routeAddBtn">경로 추가</button>
+  <button type="button" id="routeVisibilityBtn">경로 숨기기</button>
+ </div>
+ <div id="routeSavedList" class="routeSavedList" hidden></div><div class="routeActions routeActionsSub">
+  <button type="button" id="routeResetBtn">다시 선택</button>
+  <button type="button" id="routeClearBtn">경로 지우기</button>
+ </div>
+ <button type="button" id="routeCancelBtn" class="routeCancelBtn" hidden>계산 취소</button>
+ 
+</section>
+
+<section id="moveCalcPanel" class="moveCalcPanel" aria-live="polite">
+ <div class="moveCalcHead"><b>이동 시간 계산기</b><button type="button" id="moveCalcCloseBtn" title="닫기">×</button></div>
+ <div id="moveCalcStatus" class="moveCalcStatus">출발지 타일을 클릭하세요.</div>
+ <div class="moveCalcCoords"><div><span>출발</span><b id="moveCalcStartCoord">-</b></div><div><span>목적지</span><b id="moveCalcEndCoord">-</b></div></div>
+ <div id="moveCalcResult" class="moveCalcResult">이동 -</div>
+ <button type="button" id="moveCalcResetBtn" class="moveCalcResetBtn">다시 선택</button>
+ 
+</section>
+<div id="hud" aria-live="off">X -, Y -</div>
+</div></div><script src="access.js"></script></body></html>
