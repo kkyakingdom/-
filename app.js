@@ -1461,10 +1461,10 @@ function paintOverlayPixel(i,p,ps,pn,pref){
   const showResource=!!(palette&&group>=0&&pref.kinds[kind]&&groupVisible);
   let r,g,b,aLow,aHi;
   if(t===14){r=20;g=222;b=227;aLow=202;aHi=251;} // 공성 부지 중심: 주변 raw 15와 시각적으로 분리
-  else if(t===2){r=46;g=122;b=165;aLow=138;aHi=148;}
-  else if(t===3){r=33;g=37;b=36;aLow=212;aHi=234;} // 기존 산지(raw 3)의 표시 방식 복구
+  else if(t===2){r=46;g=84;b=154;aLow=174;aHi=200;} // 참조 팔레트: 하천은 차분한 깊은 청색
+  else if(t===3){r=70;g=81;b=65;aLow=214;aHi=234;} // 참조 팔레트: 산맥은 잿빛 올리브색
   else if(t===7){r=118;g=76;b=43;aLow=225;aHi=244;} // 실제 특수지형(raw 7): 따뜻한 짙은 갈색, 낮은 내부 무늬 대비
-  else if(t===0&&rr===0){r=143;g=148;b=148;aLow=32;aHi=72;} // 자원이 없는 일반 공터만 차분한 중성색으로; 자원 타일 색/레벨은 변경하지 않는다.
+  else if(t===0&&rr===0){r=73;g=105;b=71;aLow=190;aHi=221;} // 자원 없는 공터만 자연스러운 저채도 녹색. 자원 픽셀 로직은 그대로.
   else if(t===0&&palette&&group>=0&&!showResource){r=210;g=197;b=139;aLow=22;aHi=61;}
   else if(showResource&&pref.mode==='uniform'&&pref.color){[r,g,b]=pref.color;aLow=200;aHi=238;}
   else if(showResource&&group===2){[r,g,b]=palette.high;aLow=216;aHi=247;}
@@ -1662,7 +1662,35 @@ function drawTextBadge(g,text,x,y,font,fill='#FFF4D5',opts={}){
   g.restore();
 }
 
+// 사용자 제공 참고 지도에서 추출한 아이콘. 이미지 로딩 전/실패 시 기존 벡터 마커로 즉시 대체한다.
+const REFERENCE_MAP_ICONS={};
+for(const [kind,url] of Object.entries({city:'icon-city.png',gate:'icon-gate.png',boat:'icon-boat.png'})){
+  const img=new Image();
+  img.onload=()=>{REFERENCE_MAP_ICONS[kind]=img; scheduleFullDraw();};
+  img.onerror=()=>{ /* 배포 누락 시 기존 아이콘을 그대로 사용 */ };
+  img.src=url;
+}
+function drawReferenceMapIcon(g,kind,x,y,size){
+  const img=REFERENCE_MAP_ICONS[kind];
+  if(!img)return false;
+  g.save();
+  g.imageSmoothingEnabled=true;
+  g.drawImage(img,x-size/2,y-size/2,size,size);
+  g.restore();
+  return true;
+}
+
 function drawCityIconScreen(g,x,y,city,iconScale=1){
+  // 실제 게임풍 지붕형 거점 아이콘. Lv.20은 기존 고유 왕관 표시를 유지한다.
+  const iconSize=(Number(city?.level||0)>=20?38:Number(city?.level||0)>=13?34:31)*iconScale;
+  if(drawReferenceMapIcon(g,'city',x,y,iconSize)){
+    if(Number(city?.level||0)>=20){
+      g.save();g.beginPath();g.arc(x,y,iconSize*.45,0,Math.PI*2);
+      g.lineWidth=2.2;g.strokeStyle='#ffdf82';g.stroke();g.restore();
+    }
+    return;
+  }
+
   const lv=Number(city?.level||0);
   const r=lv>=20?11.5:(lv>=13?9.5:8.3);
   const fill=lv>=20?'#FFD86B':(lv>=13?'#E7BC5E':'#D39A48');
@@ -1681,6 +1709,9 @@ function drawCityIconScreen(g,x,y,city,iconScale=1){
   g.restore();
 }
 function drawGateIcon(g,x,y,kind,iconScale=1){
+  // 관문은 청록색 아치형으로 성지의 주홍색 지붕과 형태/색상을 구분한다.
+  if(drawReferenceMapIcon(g,'gate',x,y,36*iconScale))return;
+
   g.save(); g.translate(x,y);g.scale(iconScale,iconScale);
   g.beginPath(); g.arc(0,0,12,0,Math.PI*2); g.fillStyle='rgba(12,9,6,.64)'; g.fill();
   g.fillStyle=(kind==='special_gate'?'#6C9AB0':'#A87538');
@@ -1692,6 +1723,8 @@ function drawGateIcon(g,x,y,kind,iconScale=1){
   g.restore();
 }
 function drawTransportIcon(g,x,y,type){
+  if(type==='dock'&&drawReferenceMapIcon(g,'boat',x,y,30))return;
+
   g.save(); g.translate(x,y);
   g.beginPath(); g.arc(0,0,11,0,Math.PI*2); g.fillStyle='rgba(10,8,6,.60)'; g.fill();
   if(type==='dock'){
@@ -1853,8 +1886,8 @@ function drawAnnotations(){
       const iconScale=lod.strategy>.02?(majorCity?mixLod(1,.86,lod.strategy):mixLod(1,.65,lod.strategy)):1;
       ctx.save();ctx.globalAlpha=iconAlpha;drawCityIconScreen(ctx,sx,sy,city,iconScale);ctx.restore();
       // 전국 축소에서는 주 이름을 우선한다. 20레벨·선택/보급로 인접 거점은 항상 표시.
-      if(lod.strategy>.78 && lv<20 && !cityPinned)continue;
-      if(lod.strategy>.70 && lv<18 && !cityPinned)continue;
+      if(lod.strategy>.81 && lv<20 && !cityPinned)continue;
+      if(lod.strategy>.65 && lv<13 && !cityPinned)continue;
       const label=lv?`${lv} ${city.name||rgn.n}`:(city.name||rgn.n);
       const fs=lv>=20?15:(lv>=13?13:12);
       const focused=Number(city.id)===selectedS11ConnectionId;
@@ -2283,7 +2316,7 @@ function drawS11ConnectionNetwork(g){
     }
     if(!count)continue;
     g.setLineDash(mask===2?[4.5,5.5]:[]);
-    const density=mixLod(1,.91,lod.strategy);
+    const density=mixLod(1,.43,lod.strategy); // 전국 배율에서 주 경계를 가리지 않도록 전체 보급로 대비만 약화
     const outer=(focusActive?.48:.58)*density;
     const inner=(focusActive?.72:.84)*density;
     g.lineWidth=mask===3?2.75:2.50;
