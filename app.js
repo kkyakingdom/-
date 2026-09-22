@@ -149,12 +149,9 @@ function scoreRegionFillPath(id){
 function scoreShadeCacheKey(){
   return [scoreShadeRevision,map.width,map.height,renderDpr,scale].join('|');
 }
-function drawScoreAreaShading(){
-  if(!scoreShadeCanvas)return;
+function ensureScoreShadeCache(){
+  if(!scoreAreaShadingEnabled||!scoreOwners.size)return null;
   const w=map.clientWidth,h=map.clientHeight;
-  scoreShadeCtx.setTransform(1,0,0,1,0,0);
-  scoreShadeCtx.clearRect(0,0,scoreShadeCanvas.width,scoreShadeCanvas.height);
-  if(!scoreAreaShadingEnabled||!scoreOwners.size)return;
   const key=scoreShadeCacheKey();
   let entry=scoreShadeCache;
   let sx=entry?(entry.margin+entry.ox-ox):0,sy=entry?(entry.margin+entry.oy-oy):0;
@@ -184,6 +181,15 @@ function drawScoreAreaShading(){
     entry={key,canvas,margin,ox,oy,cssWidth:canvas.width/renderDpr,cssHeight:canvas.height/renderDpr};
     scoreShadeCache=entry;sx=margin;sy=margin;
   }
+  return {entry,sx,sy};
+}
+function drawScoreAreaShading(){
+  const w=map.clientWidth,h=map.clientHeight;
+  scoreShadeCtx.setTransform(1,0,0,1,0,0);
+  scoreShadeCtx.clearRect(0,0,scoreShadeCanvas.width,scoreShadeCanvas.height);
+  const cached=ensureScoreShadeCache();
+  if(!cached)return;
+  const {entry,sx,sy}=cached;
   scoreShadeCtx.setTransform(renderDpr,0,0,renderDpr,0,0);
   scoreShadeCtx.drawImage(entry.canvas,Math.round(sx*renderDpr),Math.round(sy*renderDpr),map.width,map.height,0,0,w,h);
 }
@@ -364,34 +370,52 @@ function paintCachedBase(g,entry){
   const sx=Math.round((entry.margin+entry.ox-ox)*renderDpr),sy=Math.round((entry.margin+entry.oy-oy)*renderDpr);
   g.drawImage(entry.canvas,sx,sy,map.width,map.height,0,0,map.clientWidth,map.clientHeight);
 }
-function buildBaseCache(){
-  const w=map.clientWidth,h=map.clientHeight,margin=baseMargin();
-  const canvas=document.createElement('canvas');
+// The original cache layout and all colors/terrain layers are preserved.  During
+// wheel zoom its five expensive paint passes run on separate frames, so a single
+// wheel-end frame does not have to build a large canvas and redraw the map.
+function createBaseCacheJob(){
+  const margin=baseMargin(),canvas=document.createElement('canvas');
   canvas.width=map.width+2*Math.ceil(margin*renderDpr);
   canvas.height=map.height+2*Math.ceil(margin*renderDpr);
-  const g=canvas.getContext('2d',{alpha:false});
-  const entry={canvas,key:baseCacheConfigKey(),margin,ox,oy,cssWidth:canvas.width/renderDpr,cssHeight:canvas.height/renderDpr};
+  const entry={canvas,key:baseCacheConfigKey(),margin,ox,oy,
+    cssWidth:canvas.width/renderDpr,cssHeight:canvas.height/renderDpr};
+  return {entry,g:canvas.getContext('2d',{alpha:false}),step:0,
+    scale,ox,oy,revision:cachedBaseRevision,shadeRevision:scoreShadeRevision,
+    width:map.width,height:map.height,dpr:renderDpr};
+}
+function paintBaseCachePass(job){
+  const {entry,g}=job;
   const beforeView=activeWorldView,beforeOx=ox,beforeOy=oy;
   try{
-    // Culling must include the additional border before shifting the render origin.
-    activeWorldView=viewportWorldBounds(8,margin);
-    ox+=margin;oy+=margin;
-    const bw=entry.cssWidth,bh=entry.cssHeight;
+    activeWorldView=viewportWorldBounds(8,entry.margin);
+    ox+=entry.margin;oy+=entry.margin;
     g.setTransform(renderDpr,0,0,renderDpr,0,0);
-    g.fillStyle='#0e0a06';g.fillRect(0,0,bw,bh);
-    drawWorldLayer(g,off);
-    if(showTerrain&&exactTerrainReady)drawOffsetTileTerrain(g,true);
-    g.fillStyle='rgba(0,0,0,.13)';g.fillRect(0,0,bw,bh);
-    drawTerritoryRanges(g);
-    drawHolySitePrevRanges(g);
-    drawSpecialTerrainOutline(g);
-  }finally{
-    ox=beforeOx;oy=beforeOy;activeWorldView=beforeView;
-  }
+    switch(job.step++){
+      case 0:
+        g.fillStyle='#0e0a06';g.fillRect(0,0,entry.cssWidth,entry.cssHeight);
+        drawWorldLayer(g,off);break;
+      case 1:
+        if(showTerrain&&exactTerrainReady)drawOffsetTileTerrain(g,true);
+        g.fillStyle='rgba(0,0,0,.13)';g.fillRect(0,0,entry.cssWidth,entry.cssHeight);break;
+      case 2:drawTerritoryRanges(g,'region');break;
+      case 3:drawTerritoryRanges(g,'commandery');break;
+      case 4:drawTerritoryRanges(g,'state');break;
+      case 5:drawHolySitePrevRanges(g);break;
+      case 6:drawSpecialTerrainOutline(g);break;
+    }
+  }finally{ox=beforeOx;oy=beforeOy;activeWorldView=beforeView;}
+}
+function retainBaseCache(entry){
   baseCacheEntries.push(entry);
-  // Two bounded buffers retain frequently revisited scale/position without leaks.
-  while(baseCacheEntries.length>2){const old=baseCacheEntries.shift();old.canvas.width=0;old.canvas.height=0;}
+  while(baseCacheEntries.length>2){
+    const old=baseCacheEntries.shift();old.canvas.width=0;old.canvas.height=0;
+  }
   return entry;
+}
+function buildBaseCache(){
+  const job=createBaseCacheJob();
+  while(job.step<7)paintBaseCachePass(job);
+  return retainBaseCache(job.entry);
 }
 
 // 성능 우선: 화면이 매우 큰 경우 내부 캔버스 해상도를 자동으로 조금 낮춰 드래그/확대 시 렉을 줄인다.
@@ -769,7 +793,7 @@ function visualLod(){
 }
 function mixLod(a,b,t){return a+(b-a)*t;}
 
-function drawTerritoryRanges(g){
+function drawTerritoryRanges(g,part='all'){
   if(!borderMode || !regionBoundaryPath || !commanderyBoundaryPath) return;
 
   g.save();
@@ -783,23 +807,27 @@ function drawTerritoryRanges(g){
   const lod=visualLod();
 
   // 1. 성지(소지역) 경계: 지형 뒤로 물러나는 가느다란 점선.
-  g.setLineDash([2.3*inv,5.8*inv]);
-  g.lineWidth=mixLod(.48,1.05,lod.detail)*inv;
-  g.strokeStyle=`rgba(213,219,211,${mixLod(.06,.46,1-lod.strategy)})`;
-  strokeBoundary(g,regionBoundaryPath,regionBoundaryChunks);
+  if(part==='all'||part==='region'){
+    g.setLineDash([2.3*inv,5.8*inv]);
+    g.lineWidth=mixLod(.48,1.05,lod.detail)*inv;
+    g.strokeStyle=`rgba(213,219,211,${mixLod(.06,.46,1-lod.strategy)})`;
+    strokeBoundary(g,regionBoundaryPath,regionBoundaryChunks);
+  }
 
   // 2. 군 경계: 주 경계와 구분되는 차분한 호박색. 지형 위에서 읽히는 얇은 그림자 선.
-  g.setLineDash([]);
-  g.lineWidth=mixLod(1.8,3.2,1-lod.strategy)*inv;
-  g.strokeStyle=`rgba(32,24,20,${mixLod(.20,.50,1-lod.strategy)})`;
-  strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
-  g.lineWidth=mixLod(.9,1.85,1-lod.strategy)*inv;
-  g.strokeStyle=`rgba(201,145,96,${mixLod(.24,.80,1-lod.strategy)})`;
-  strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
+  if(part==='all'||part==='commandery'){
+    g.setLineDash([]);
+    g.lineWidth=mixLod(1.8,3.2,1-lod.strategy)*inv;
+    g.strokeStyle=`rgba(32,24,20,${mixLod(.20,.50,1-lod.strategy)})`;
+    strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
+    g.lineWidth=mixLod(.9,1.85,1-lod.strategy)*inv;
+    g.strokeStyle=`rgba(201,145,96,${mixLod(.24,.80,1-lod.strategy)})`;
+    strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
+  }
 
   // 3. 주 경계: 강과 달리 끊어지는 청회백색 파선. 배경 암색 외곽도
   // 같은 dash pattern을 써서 물길처럼 보이는 연속된 검은 띠가 남지 않게 한다.
-  if(stateBoundaryDashedPath||stateBoundaryPath){
+  if((part==='all'||part==='state')&&(stateBoundaryDashedPath||stateBoundaryPath)){
     const statePath=stateBoundaryDashedPath||stateBoundaryPath;
     g.setLineDash([11*inv,7*inv]);
     g.lineWidth=mixLod(4.8,7.4,lod.strategy)*inv;
@@ -3171,19 +3199,98 @@ let previewBaseScale=scale, previewBaseOx=ox, previewBaseOy=oy;
 let dragStartX=0, dragStartY=0, dragBaseOx=0, dragBaseOy=0;
 let dragPreviewCaptured=false,pendingDragRefresh=false;
 let zoomPreviewActive=false, zoomCommitTimer=0;
+// Cancelable, frame-sliced wheel commit: keep the last complete bitmap visible
+// while preparing an exact, full-quality terrain/border cache for the new zoom.
+let zoomCacheJob=null,zoomCacheRAF=0,zoomCacheSerial=0;
+mapPerf.zoomCachePassMs=[];
+function cancelZoomCacheJob(){
+  zoomCacheSerial++;
+  if(zoomCacheRAF){cancelAnimationFrame(zoomCacheRAF);zoomCacheRAF=0;}
+  if(zoomCacheJob){zoomCacheJob.entry.canvas.width=0;zoomCacheJob.entry.canvas.height=0;zoomCacheJob=null;}
+}
+function zoomJobIsCurrent(job,serial){
+  return serial===zoomCacheSerial&&zoomPreviewActive&&zoomCacheJob===job&&
+    job.scale===scale&&job.ox===ox&&job.oy===oy&&
+    job.width===map.width&&job.height===map.height&&job.dpr===renderDpr&&
+    job.revision===cachedBaseRevision&&job.shadeRevision===scoreShadeRevision&&
+    job.entry.key===baseCacheConfigKey();
+}
+function prepareWheelCommit(){
+  zoomCommitTimer=0;
+  if(!zoomPreviewActive)return;
+  if(pendingWheelRAF){zoomCommitTimer=setTimeout(prepareWheelCommit,40);return;}
+  cancelZoomCacheJob();
+  // On a repeated exact scale a cached base is already usable.
+  if(findBaseCache()){commitPreview();return;}
+  const serial=zoomCacheSerial,job=createBaseCacheJob();
+  zoomCacheJob=job;
+  function step(){
+    zoomCacheRAF=0;
+    if(!zoomJobIsCurrent(job,serial)){
+      if(zoomCacheJob===job)cancelZoomCacheJob();
+      return;
+    }
+    const deadline=performance.now()+7;
+    // Fast PCs may finish multiple small passes per frame, slow PCs yield
+    // between passes rather than blocking pointer/scroll handling.
+    do{
+      const start=performance.now();
+      paintBaseCachePass(job);
+      mapPerf.zoomCachePassMs.push(Math.round((performance.now()-start)*10)/10);
+      if(mapPerf.zoomCachePassMs.length>20)mapPerf.zoomCachePassMs.shift();
+    }while(job.step<7&&performance.now()<deadline);
+    if(job.step<7){zoomCacheRAF=requestAnimationFrame(step);return;}
+    // Cache territory shading independently before changing the visible canvas.
+    // This avoids a large score overlay fill during the final wheel commit.
+    if(scoreAreaShadingEnabled&&scoreOwners.size){
+      zoomCacheRAF=requestAnimationFrame(()=>{
+        zoomCacheRAF=0;
+        if(!zoomJobIsCurrent(job,serial)){if(zoomCacheJob===job)cancelZoomCacheJob();return;}
+        ensureScoreShadeCache();
+        zoomCacheJob=null;retainBaseCache(job.entry);commitPreview();
+      });
+    }else{
+      zoomCacheJob=null;retainBaseCache(job.entry);commitPreview();
+    }
+  }
+  zoomCacheRAF=requestAnimationFrame(step);
+}
 // Wheel-only fast path: transform existing raster layers on the compositor.
 // Do not copy or repaint three full-size canvases for every wheel event.
 let wheelBaseScale=scale,wheelBaseOx=ox,wheelBaseOy=oy;
 const wheelLayers=[map,scoreShadeCanvas,fx];
+// When zooming OUT the viewport bitmap contracts, revealing world tiles that
+// were previously just outside the screen. Display the EXISTING overscanned
+// terrain cache behind the contracting viewport instead of a dark empty gap.
+// The cache canvas is reused directly as a DOM layer: no GPU readback, image
+// copy or extra cache generation on the wheel input path.
+let wheelUnderlay=null;
+function attachWheelUnderlay(){
+  if(wheelUnderlay)return;
+  const entry=findBaseCache(true);
+  if(!entry||!entry.canvas.width)return;
+  const sx=entry.margin+entry.ox-ox,sy=entry.margin+entry.oy-oy;
+  const canvas=entry.canvas;
+  canvas.style.cssText=`position:absolute;left:${-sx}px;top:${-sy}px;width:${entry.cssWidth}px;height:${entry.cssHeight}px;pointer-events:none;transform-origin:0 0;will-change:transform;`;
+  map.parentElement.insertBefore(canvas,map);
+  wheelUnderlay={canvas,sx,sy};
+}
 function setWheelLayerTransform(){
   const ratio=scale/Math.max(wheelBaseScale,0.000001);
   const oldAx=wheelBaseOx+CX*wheelBaseScale,oldAy=wheelBaseOy+CY*wheelBaseScale;
   const dx=(ox+CX*scale)-ratio*oldAx,dy=(oy+CY*scale)-ratio*oldAy;
   const transform=`translate3d(${dx}px,${dy}px,0) scale(${ratio})`;
   for(const canvas of wheelLayers)canvas.style.transform=transform;
+  // A layer positioned at (-sx,-sy) needs a local translation correction to
+  // undergo the exact same screen-space transform as the viewport canvases.
+  if(wheelUnderlay){
+    const {canvas,sx,sy}=wheelUnderlay;
+    canvas.style.transform=`translate3d(${dx+(1-ratio)*sx}px,${dy+(1-ratio)*sy}px,0) scale(${ratio})`;
+  }
 }
 function clearWheelLayerTransform(){
   for(const canvas of wheelLayers){canvas.style.transform='';canvas.style.willChange='';}
+  if(wheelUnderlay){wheelUnderlay.canvas.remove();wheelUnderlay.canvas.style.cssText='';wheelUnderlay=null;}
 }
 let pendingWheelRAF=0,pendingWheelDelta=0,pendingWheelX=0,pendingWheelY=0;
 let pendingHoverClientX=0, pendingHoverClientY=0;
@@ -3234,9 +3341,12 @@ function schedulePreview(){ if(!previewRAF) previewRAF=requestAnimationFrame(dra
 function cancelPreviewFrame(){ if(previewRAF){ cancelAnimationFrame(previewRAF); previewRAF=0; } }
 function commitPreview(){
   cancelPreviewFrame();
+  cancelZoomCacheJob();
   if(pendingWheelRAF){cancelAnimationFrame(pendingWheelRAF);pendingWheelRAF=0;flushWheelZoom();}
   zoomPreviewActive=false;
   if(zoomCommitTimer){clearTimeout(zoomCommitTimer);zoomCommitTimer=0;}
+  // Clear the preview transform and replace its image in one browser frame.
+  // Leaving the transform active while calling draw() would scale the new map twice.
   clearWheelLayerTransform();
   draw();
 }
@@ -3395,15 +3505,28 @@ function flushWheelZoom(){
   const px=pendingWheelX,py=pendingWheelY;
   const world=screenToWorld(px,py);
   const nextScale=Math.max(.12,Math.min(MAX_SCALE,scale*Math.exp(-delta*0.00145)));
+  // At a zoom limit wheel events must not trigger another expensive full redraw.
+  if(nextScale===scale){
+    if(zoomCommitTimer)clearTimeout(zoomCommitTimer);
+    // At a hard zoom limit no image or coordinates changed: do not redraw.
+    if(wheelBaseScale===scale&&wheelBaseOx===ox&&wheelBaseOy===oy){
+      zoomPreviewActive=false;clearWheelLayerTransform();return;
+    }
+    zoomCommitTimer=setTimeout(prepareWheelCommit,delta>0?80:135);
+    return;
+  }
+  cancelZoomCacheJob();
   scale=nextScale;
   const dx=(world[0]-CX)*scale*FLIP_X,dy=(world[1]-CY)*scale;
   ox=px-(CX*scale+dx*COS-dy*SIN);
   oy=py-(CY*scale+dx*SIN+dy*COS);
   // A compositor transform is far cheaper than three full-canvas drawImage calls.
   // Only one precise canvas render is performed after the wheel burst settles.
+  // Shorter settling on zoom-out reduces the time until newly visible tiles
+  // get their exact boundaries, labels and resource render.
   setWheelLayerTransform();
   if(zoomCommitTimer)clearTimeout(zoomCommitTimer);
-  zoomCommitTimer=setTimeout(commitPreview,165);
+  zoomCommitTimer=setTimeout(prepareWheelCommit,delta>0?80:135);
 }
 map.parentElement.addEventListener('wheel',e=>{
   // Do not hijack scrolling in floating menus or input panels.
@@ -3417,8 +3540,18 @@ map.parentElement.addEventListener('wheel',e=>{
     cancelPreviewFrame();
     wheelBaseScale=scale;wheelBaseOx=ox;wheelBaseOy=oy;
     for(const canvas of wheelLayers){canvas.style.transformOrigin='0 0';canvas.style.willChange='transform';}
+    // Capture cached surrounding terrain BEFORE changing the zoom scale.
+    // Do not touch the existing foreground bitmap or any map data/settings.
+    if(e.deltaY>0)attachWheelUnderlay();
     zoomPreviewActive=true;
   }
+  if(e.deltaY>0&&!wheelUnderlay){
+    // The reference bitmap still uses wheelBaseScale; an already-running
+    // zoom-in can safely keep its original foreground if no matching underlay.
+    if(scale===wheelBaseScale)attachWheelUnderlay();
+  }
+  if(zoomCacheJob)cancelZoomCacheJob();
+  if(zoomCommitTimer){clearTimeout(zoomCommitTimer);zoomCommitTimer=0;}
   const delta=e.deltaY*(e.deltaMode===1?16:(e.deltaMode===2?map.clientHeight:1));
   pendingWheelDelta+=delta;
   if(!pendingWheelRAF)pendingWheelRAF=requestAnimationFrame(flushWheelZoom);
