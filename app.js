@@ -2243,8 +2243,8 @@ function drawS11ConnectionNetwork(g){
   for(const [id,node] of Object.entries(S11_CONN_NODES))pixels[id]=tileCenterToScreen(node[1]-1,node[2]-1);
   const focusActive=!!(selectedS11ConnectionId && S11_CONN_NODES[selectedS11ConnectionId]);
   g.save();g.lineCap='round';g.lineJoin='round';
-  // 연결선은 행정 경계가 아니다. 전체망은 가늘고 옅은 회보라색 계열로,
-  // 선택 성지의 직접 연결만 별도 최상단 레이어에서 강조한다.
+  // 보급로 전체망도 어느 정도 읽히도록 배경 윤곽선 + 속선을 함께 그린다.
+  // 직접 선택한 연결은 아래 별도 강조 레이어가 계속 담당한다.
   for(const mask of [3,1,2]){
     g.beginPath();
     for(const [a,b,m] of S11_CONN_EDGES){
@@ -2255,13 +2255,15 @@ function drawS11ConnectionNetwork(g){
       g.moveTo(pa[0],pa[1]);g.lineTo(pb[0],pb[1]);
     }
     g.setLineDash(mask===2?[4,5]:[]);
-    // 연결망의 배경선: 선택 연결(아래 별도 강조 레이어)과 구분되면서도
-    // 주변 성지 연결 관계를 따라갈 수 있도록 중간 밝기 / 가는 두께 유지.
-    g.lineWidth=mask===3?1.2:(mask===1?1.18:1.12);
-    // All non-selected edges share one muted blue-gray hue. The original edge
-    // category remains readable from the solid / dashed line pattern.
-    const a=focusActive?0.40:0.48;
-    g.strokeStyle=`rgba(163,194,209,${a})`;
+    const outlineAlpha=focusActive?0.54:0.62;
+    const innerAlpha=focusActive?0.68:0.76;
+    const widthOuter=mask===3?2.45:(mask===1?2.35:2.25);
+    const widthInner=mask===3?1.36:(mask===1?1.30:1.22);
+    g.lineWidth=widthOuter;
+    g.strokeStyle=`rgba(12,20,29,${outlineAlpha})`;
+    g.stroke();
+    g.lineWidth=widthInner;
+    g.strokeStyle=`rgba(196,222,233,${innerAlpha})`;
     g.stroke();
   }
   g.restore();
@@ -3138,7 +3140,7 @@ document.getElementById('connectionToggleBtn')?.addEventListener('click',e=>{
   showS11Connections=!showS11Connections;
   e.currentTarget.classList.toggle('active',showS11Connections);
   e.currentTarget.setAttribute('aria-pressed',String(showS11Connections));
-  e.currentTarget.textContent='성지 연결';
+  e.currentTarget.textContent='보급로';
   scheduleFullDraw();
 });
 resize(); updateInfo(null,null,null); renderScorePanel(); loadExactTileLayers();
