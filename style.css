@@ -667,23 +667,25 @@ body.steelPicking #map{cursor:crosshair}body.steelPicking #map:active{cursor:cro
 @media(max-width:760px){.landExportPanel{top:68px;right:6px;width:calc(100vw - 12px);max-height:55vh}.landExportLevels{grid-template-columns:repeat(4,1fr)}}
 
 /* v22.9.22: entry password screen (visual access gate for a static site). */
+body.access-locked{overflow:hidden}
 body.access-locked #app{visibility:hidden;pointer-events:none}
-.access-gate{position:fixed;inset:0;z-index:99999;display:grid;place-items:center;overflow:auto;padding:24px;background:radial-gradient(circle at 50% 20%,#493b28 0%,#1a150f 60%,#100d0a 100%);color:#f7efdf}
+.access-gate{position:fixed;inset:0;z-index:99999;display:grid;place-items:center;overflow:auto;padding:8px;background:radial-gradient(circle at 50% 20%,#2b1d10 0%,#17110d 54%,#090705 100%);color:#f7efdf}
 .access-gate[hidden]{display:none!important}
-.access-card{width:min(100%,370px);padding:30px 25px 25px;border:1px solid #8c7043;border-radius:18px;background:rgba(31,24,17,.97);box-shadow:0 22px 65px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:12px}
-.access-mark{align-self:center;color:#f2d18b;font-size:32px;line-height:1.2}
-.access-card h1{margin:0;font-size:23px;line-height:1.35;text-align:center;color:#ffe4aa}
-.access-card .access-intro{margin:0 0 8px;font-size:13px;line-height:1.6;text-align:center;color:#d5c6ab}
-.access-card label{font-size:13px;font-weight:700;color:#efdfc2}
-.access-card input{width:100%;min-height:46px;background:#17120e;border:1px solid #9f8151;border-radius:9px;color:#fff5da;font-size:19px;letter-spacing:4px;text-align:center}
-.access-card input::placeholder{font-size:13px;letter-spacing:normal;color:#ab9a81}
-.access-card input:focus-visible{outline:2px solid #ffd982;outline-offset:2px}
-.access-card button{min-height:46px;border:1px solid #d4ab63;border-radius:9px;background:#5b4122;color:#fff3d7;font-weight:800;font-size:15px}
-.access-card button:hover{background:#76552a}
-.access-card button:disabled{cursor:wait;opacity:.72}
-.access-card .access-error{min-height:17px;margin:0;color:#ffb0a8;font-size:12px;text-align:center}
-.access-card .access-loading{margin:0;color:#f3d493;font-size:12px;text-align:center}
-@media(max-width:400px){.access-gate{padding:14px}.access-card{padding:24px 18px}}
+.access-card{position:relative;width:min(460px,calc(100vw - 16px),calc((100dvh - 16px)*0.6666667));aspect-ratio:2/3;padding:0;border:none;border-radius:0;background:url("access-screen-bg.png") center/100% 100% no-repeat;box-shadow:0 22px 70px rgba(0,0,0,.45);display:block;overflow:hidden}
+.access-mark,.access-card h1,.access-card .access-intro,.access-card label{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+.access-card input{position:absolute;left:22.90%;top:50.00%;width:54.30%;height:5.47%;min-height:0;padding:0 6px;background:#f2f6ff;border:1px solid #d9bf80;border-radius:clamp(8px,1.8vw,16px);color:#111319;font-size:clamp(15px,2.4vw,25px);font-weight:700;letter-spacing:.25em;text-align:center;box-shadow:none}
+.access-card input::placeholder{color:transparent}
+.access-card input:focus-visible{outline:2px solid rgba(255,220,132,.98);outline-offset:-3px}
+.access-card button{position:absolute;left:22.90%;top:59.30%;width:54.30%;height:5.66%;min-height:0;padding:0;border:0;border-radius:clamp(8px,1.8vw,16px);background:transparent;color:transparent;font-size:0;cursor:pointer}
+.access-card button:hover{background:rgba(255,255,255,.02)}
+.access-card button:focus-visible{outline:3px solid rgba(255,224,148,.98);outline-offset:2px}
+.access-card button:disabled{cursor:wait;opacity:.82}
+.access-card .access-error,.access-card .access-loading{position:absolute;left:50%;top:56.05%;bottom:auto;transform:translateX(-50%);width:68%;margin:0;padding:2px 4px;border-radius:6px;background:rgba(29,18,9,.92);text-align:center;font-size:clamp(8px,1.9vw,11px);line-height:1.2;pointer-events:none}
+.access-card .access-error{color:#ffb5af}
+.access-card .access-error:empty,.access-card .access-loading[hidden]{display:none!important}
+.access-card .access-loading{color:#f3d493}
+@media(max-width:520px){.access-gate{padding:8px}.access-card input{border-radius:10px}.access-card button{border-radius:10px}}
+@media(max-width:390px){.access-card .access-error,.access-card .access-loading{font-size:8px;width:72%;padding:1px 3px}}
 
 /* v22.9.23: restrained controls / spacious map. All existing controls and resource palette remain intact. */
 @media(min-width:901px){
