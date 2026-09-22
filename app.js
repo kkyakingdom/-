@@ -1820,7 +1820,8 @@ function centerOnTile(tx,ty,newScale){
 
 function regionAt(x,y){ x=Math.floor(x); y=Math.floor(y); if(x<0||y<0||x>=W||y>=H) return null; return codeHex(codes[y*W+x]); }
 function toMap(clientX,clientY){
-  const r=map.getBoundingClientRect();
+  // Keep pointer-to-world coordinates stable while the map canvas is CSS-transformed.
+  const r=map.parentElement.getBoundingClientRect();
   return screenToTilePoint(clientX-r.left, clientY-r.top);
 }
 function nearList(arr,x,y,rad){ return (arr||[]).some(p=>((p.x-1-x)*(p.x-1-x)+(p.y-1-y)*(p.y-1-y))<=rad*rad); }
@@ -3168,6 +3169,20 @@ let previewBaseScale=scale, previewBaseOx=ox, previewBaseOy=oy;
 let dragStartX=0, dragStartY=0, dragBaseOx=0, dragBaseOy=0;
 let dragPreviewCaptured=false,pendingDragRefresh=false;
 let zoomPreviewActive=false, zoomCommitTimer=0;
+// Wheel-only fast path: transform existing raster layers on the compositor.
+// Do not copy or repaint three full-size canvases for every wheel event.
+let wheelBaseScale=scale,wheelBaseOx=ox,wheelBaseOy=oy;
+const wheelLayers=[map,scoreShadeCanvas,fx];
+function setWheelLayerTransform(){
+  const ratio=scale/Math.max(wheelBaseScale,0.000001);
+  const oldAx=wheelBaseOx+CX*wheelBaseScale,oldAy=wheelBaseOy+CY*wheelBaseScale;
+  const dx=(ox+CX*scale)-ratio*oldAx,dy=(oy+CY*scale)-ratio*oldAy;
+  const transform=`translate3d(${dx}px,${dy}px,0) scale(${ratio})`;
+  for(const canvas of wheelLayers)canvas.style.transform=transform;
+}
+function clearWheelLayerTransform(){
+  for(const canvas of wheelLayers){canvas.style.transform='';canvas.style.willChange='';}
+}
 let pendingWheelRAF=0,pendingWheelDelta=0,pendingWheelX=0,pendingWheelY=0;
 let pendingHoverClientX=0, pendingHoverClientY=0;
 let lastHoverSignature='';
@@ -3220,6 +3235,7 @@ function commitPreview(){
   if(pendingWheelRAF){cancelAnimationFrame(pendingWheelRAF);pendingWheelRAF=0;flushWheelZoom();}
   zoomPreviewActive=false;
   if(zoomCommitTimer){clearTimeout(zoomCommitTimer);zoomCommitTimer=0;}
+  clearWheelLayerTransform();
   draw();
 }
 function scheduleFullDraw(){
@@ -3381,16 +3397,26 @@ function flushWheelZoom(){
   const dx=(world[0]-CX)*scale*FLIP_X,dy=(world[1]-CY)*scale;
   ox=px-(CX*scale+dx*COS-dy*SIN);
   oy=py-(CY*scale+dx*SIN+dy*COS);
-  // Draw the latest wheel position now; a second nested RAF adds input latency.
-  cancelPreviewFrame();drawPreview();
+  // A compositor transform is far cheaper than three full-canvas drawImage calls.
+  // Only one precise canvas render is performed after the wheel burst settles.
+  setWheelLayerTransform();
   if(zoomCommitTimer)clearTimeout(zoomCommitTimer);
-  zoomCommitTimer=setTimeout(commitPreview,105);
+  zoomCommitTimer=setTimeout(commitPreview,165);
 }
-map.addEventListener('wheel',e=>{
+map.parentElement.addEventListener('wheel',e=>{
+  // Do not hijack scrolling in floating menus or input panels.
+  if(e.target!==map && e.target!==map.parentElement)return;
   e.preventDefault();
-  const r=map.getBoundingClientRect();
+  // map.getBoundingClientRect() is transformed during the compositor preview;
+  // mapwrap has the stable, untransformed viewport coordinates.
+  const r=map.parentElement.getBoundingClientRect();
   pendingWheelX=e.clientX-r.left;pendingWheelY=e.clientY-r.top;
-  if(!zoomPreviewActive){capturePreview();zoomPreviewActive=true;}
+  if(!zoomPreviewActive){
+    cancelPreviewFrame();
+    wheelBaseScale=scale;wheelBaseOx=ox;wheelBaseOy=oy;
+    for(const canvas of wheelLayers){canvas.style.transformOrigin='0 0';canvas.style.willChange='transform';}
+    zoomPreviewActive=true;
+  }
   const delta=e.deltaY*(e.deltaMode===1?16:(e.deltaMode===2?map.clientHeight:1));
   pendingWheelDelta+=delta;
   if(!pendingWheelRAF)pendingWheelRAF=requestAnimationFrame(flushWheelZoom);
