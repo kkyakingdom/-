@@ -684,3 +684,93 @@ body.access-locked #app{visibility:hidden;pointer-events:none}
 .access-card .access-error{min-height:17px;margin:0;color:#ffb0a8;font-size:12px;text-align:center}
 .access-card .access-loading{margin:0;color:#f3d493;font-size:12px;text-align:center}
 @media(max-width:400px){.access-gate{padding:14px}.access-card{padding:24px 18px}}
+
+/* v22.9.23: restrained controls / spacious map. All existing controls and resource palette remain intact. */
+@media(min-width:901px){
+  #leftpanel{left:9px;width:262px;gap:6px;top:68px;max-height:calc(100dvh - 78px)!important;}
+  #leftpanel > .coordPanel{padding:8px 10px!important;max-height:none!important;}
+  #leftpanel > #info{padding:8px 10px!important;max-height:min(40dvh,320px)!important;}
+  #leftpanel > .counterPanel{max-height:none!important;}
+  #leftpanel > #hoverTileInfo.hoverTilePanel{padding:8px 10px!important;min-height:0!important;}
+  #leftpanel .panelHead{margin-bottom:6px;}
+}
+#topbar .top-actions{gap:4px;padding:5px 6px;border-color:#77674e;background:rgba(23,22,21,.96);}
+#topbar .top-actions > .btn{padding:8px 7px;font-size:12px;min-height:35px;}
+#topbar .top-actions > .iconBtn{font-size:18px;min-width:34px;padding:5px;}
+#topbar #search{width:clamp(164px,16vw,230px);min-height:35px;background:#28231d;}
+#topbar #routeToggleBtn,#topbar #scoreToggleBtn,#topbar #steelToggleBtn{margin-left:6px;}
+#topbar .top-actions > .btn.active,#topbar .top-actions > .btn[aria-pressed="true"]{background:#3e3629;color:#fff4dc;}
+#leftpanel .panel{background:rgba(22,20,17,.94);border-color:rgba(206,177,122,.46);}
+#leftpanel .panel .panelHead h2{color:#edcf96;}
+#leftpanel #info .infoCard{background:rgba(31,30,28,.88);border-color:#756245;}
+#leftpanel #info .city{background:#302b22;border-color:#846c44;}
+#leftpanel #info .title{color:#f3dfa8;}
+#leftpanel .coord input{padding:7px 8px;font-size:12px;}
+#leftpanel .coord .btn{padding:7px 9px;font-size:12px;}
+@media(min-width:901px) and (max-width:1280px){
+  #topbar .top-actions{gap:3px;padding:4px 5px;}
+  #topbar .top-actions > .btn{padding:7px 5px;font-size:11px;}
+  #topbar #search{width:145px;font-size:11px;}
+  #topbar #routeToggleBtn,#topbar #scoreToggleBtn,#topbar #steelToggleBtn{margin-left:3px;}
+}
+@media(max-width:900px){
+  #topbar .top-actions > .btn{min-height:34px;}
+  #leftpanel .panel{background:rgba(22,20,17,.96);}
+  #leftpanel > #info{max-height:min(42dvh,320px)!important;}
+  #leftpanel .panelHead{margin-bottom:6px;}
+}
+
+/* v22.9.24: left UI cards must participate in normal document flow. Older
+   fixed heights combined with growing city details could overlap the counter.
+   The column scrolls as a unit on short displays; no card content is cut off. */
+#leftpanel{
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  gap:8px;
+  overflow-y:auto!important;
+  overflow-x:hidden!important;
+  overscroll-behavior-y:contain;
+  scrollbar-width:thin;
+  min-height:0;
+  max-height:calc(100dvh - 80px)!important;
+}
+#leftpanel > .mapCreator,
+#leftpanel > .coordPanel,
+#leftpanel > #info,
+#leftpanel > .counterPanel,
+#leftpanel > #hoverTileInfo.hoverTilePanel{
+  position:relative!important;
+  flex:0 0 auto!important;
+  height:auto!important;
+  min-height:0!important;
+  max-height:none!important;
+  overflow:visible!important;
+  margin:0!important;
+  width:100%;
+}
+#leftpanel > .mapCreator{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:8px 12px;
+  border-radius:10px;
+  border:1px solid rgba(206,177,122,.50);
+  background:rgba(22,20,17,.96);
+  box-shadow:var(--shadow);
+  color:#f8e3af;
+  font-size:12px;
+  line-height:1.4;
+  pointer-events:none;
+}
+#leftpanel .mapCreatorLabel{color:#d2bd93;font-size:11px;font-weight:600;}
+#leftpanel .mapCreator strong{font-size:13px;font-weight:850;letter-spacing:.01em;}
+#leftpanel > #info #selectionContent{min-width:0;overflow-wrap:anywhere;}
+#leftpanel > #info .infoCard{min-width:0;}
+/* On mobile, the panel itself already scrolls. Keep the creator row inside it,
+   while retaining the original show/hide button and all existing controls. */
+@media (max-width:900px){
+  #leftpanel{max-height:calc(100dvh - 118px)!important;}
+  body.showPanel #leftpanel{display:flex;}
+}

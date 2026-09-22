@@ -463,6 +463,25 @@ let regionPathByCode={};
 let regionBoundaryCount=0;
 let commanderyBoundaryCount=0;
 let stateBoundaryCount=0;
+const BOUNDARY_CHUNK_SIZE=96;
+let regionBoundaryChunks=new Map(), commanderyBoundaryChunks=new Map();
+function boundaryChunkAdd(chunks,x1,y1,x2,y2){
+  const mx=(x1+x2)*.5,my=(y1+y2)*.5;
+  const cx=Math.floor(mx/BOUNDARY_CHUNK_SIZE),cy=Math.floor(my/BOUNDARY_CHUNK_SIZE);
+  const key=cx+','+cy;
+  let item=chunks.get(key);
+  if(!item){
+    item={path:new Path2D(),bounds:{minX:cx*BOUNDARY_CHUNK_SIZE-2,
+      minY:cy*BOUNDARY_CHUNK_SIZE-2,maxX:(cx+1)*BOUNDARY_CHUNK_SIZE+2,
+      maxY:(cy+1)*BOUNDARY_CHUNK_SIZE+2}};
+    chunks.set(key,item);
+  }
+  item.path.moveTo(x1,y1);item.path.lineTo(x2,y2);
+}
+function strokeBoundary(g,whole,chunks){
+  if(scale<1.4 || !chunks.size){g.stroke(whole);return;}
+  for(const item of chunks.values()) if(intersectsWorldView(item.bounds)) g.stroke(item.path);
+}
 
 function buildTerritoryBoundarySegments(){
   // IMPORTANT: the world grid is staggered. Odd 0-based X columns (= even in-game X)
@@ -472,6 +491,7 @@ function buildTerritoryBoundarySegments(){
   commanderyBoundaryPath=new Path2D();
   stateBoundaryPath=new Path2D();
   stateBoundaryDashedPath=null;
+  regionBoundaryChunks=new Map();commanderyBoundaryChunks=new Map();
   const stateSegments=[];
   regionPathByCode={};
   regionBoundaryCount=0;
@@ -499,9 +519,9 @@ function buildTerritoryBoundarySegments(){
     if(kind==='state'){
       addEdge(stateBoundaryPath,x1,y1,x2,y2); stateSegments.push([x1,y1,x2,y2]); stateBoundaryCount++;
     }else if(kind==='commandery'){
-      addEdge(commanderyBoundaryPath,x1,y1,x2,y2); commanderyBoundaryCount++;
+      addEdge(commanderyBoundaryPath,x1,y1,x2,y2);boundaryChunkAdd(commanderyBoundaryChunks,x1,y1,x2,y2); commanderyBoundaryCount++;
     }else if(kind==='region'){
-      addEdge(regionBoundaryPath,x1,y1,x2,y2); regionBoundaryCount++;
+      addEdge(regionBoundaryPath,x1,y1,x2,y2);boundaryChunkAdd(regionBoundaryChunks,x1,y1,x2,y2); regionBoundaryCount++;
     }
   };
 
@@ -588,7 +608,7 @@ function joinBoundarySegmentsForDashes(edges){
 // 배율별 *시각적 우선순위*만 변경한다. 아이콘/선택/검색/추출/자원 필터는 배율에 관계없이 작동한다.
 function visualLod(){
   const smooth=(a,b)=>{const t=Math.max(0,Math.min(1,(scale-a)/(b-a)));return t*t*(3-2*t);};
-  return {strategy:1-smooth(.48,1.15), detail:smooth(3.4,7.0)};
+  return {strategy:1-smooth(.53,1.27), detail:smooth(3.1,6.5)};
 }
 function mixLod(a,b,t){return a+(b-a)*t;}
 
@@ -608,17 +628,17 @@ function drawTerritoryRanges(g){
   // 1. 성지(소지역) 경계: 지형 뒤로 물러나는 가느다란 점선.
   g.setLineDash([3.5*inv,5.0*inv]);
   g.lineWidth=mixLod(.55,1.2,lod.detail)*inv;
-  g.strokeStyle=`rgba(251,238,206,${mixLod(.12,.53,1-lod.strategy)})`;
-  g.stroke(regionBoundaryPath);
+  g.strokeStyle=`rgba(229,225,213,${mixLod(.08,.51,1-lod.strategy)})`;
+  strokeBoundary(g,regionBoundaryPath,regionBoundaryChunks);
 
   // 2. 군 경계: 주 경계와 구분되는 차분한 호박색. 지형 위에서 읽히는 얇은 그림자 선.
   g.setLineDash([]);
   g.lineWidth=mixLod(2.0,3.8,1-lod.strategy)*inv;
   g.strokeStyle=`rgba(36,25,19,${mixLod(.24,.55,1-lod.strategy)})`;
-  g.stroke(commanderyBoundaryPath);
+  strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
   g.lineWidth=mixLod(.95,2.05,1-lod.strategy)*inv;
-  g.strokeStyle=`rgba(255,176,98,${mixLod(.33,.85,1-lod.strategy)})`;
-  g.stroke(commanderyBoundaryPath);
+  g.strokeStyle=`rgba(216,166,112,${mixLod(.28,.86,1-lod.strategy)})`;
+  strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
 
   // 3. 주 경계: 강과 달리 끊어지는 청회백색 파선. 배경 암색 외곽도
   // 같은 dash pattern을 써서 물길처럼 보이는 연속된 검은 띠가 남지 않게 한다.
@@ -629,7 +649,7 @@ function drawTerritoryRanges(g){
     g.strokeStyle='rgba(15,23,34,.94)';
     g.stroke(statePath);
     g.lineWidth=mixLod(2.55,3.25,lod.strategy)*inv;
-    g.strokeStyle='rgba(241,245,246,.98)';
+    g.strokeStyle='rgba(236,241,242,.98)';
     g.stroke(statePath);
     g.setLineDash([]);
   }
@@ -1444,7 +1464,8 @@ function paintOverlayPixel(i,p,ps,pn,pref){
   else if(t===2){r=46;g=122;b=165;aLow=138;aHi=148;}
   else if(t===3){r=33;g=37;b=36;aLow=212;aHi=234;} // 기존 산지(raw 3)의 표시 방식 복구
   else if(t===7){r=118;g=76;b=43;aLow=225;aHi=244;} // 실제 특수지형(raw 7): 따뜻한 짙은 갈색, 낮은 내부 무늬 대비
-  else if(t===0&&(rr===0||(palette&&group>=0&&!showResource))){r=210;g=197;b=139;aLow=22;aHi=61;}
+  else if(t===0&&rr===0){r=143;g=148;b=148;aLow=32;aHi=72;} // 자원이 없는 일반 공터만 차분한 중성색으로; 자원 타일 색/레벨은 변경하지 않는다.
+  else if(t===0&&palette&&group>=0&&!showResource){r=210;g=197;b=139;aLow=22;aHi=61;}
   else if(showResource&&pref.mode==='uniform'&&pref.color){[r,g,b]=pref.color;aLow=200;aHi=238;}
   else if(showResource&&group===2){[r,g,b]=palette.high;aLow=216;aHi=247;}
   else if(showResource&&group===1){[r,g,b]=RESOURCE_LEVEL9_COLOR;aLow=190;aHi=238;}
@@ -1757,6 +1778,10 @@ function drawAnnotations(){
   const r=map.getBoundingClientRect(), w=r.width, h=r.height;
   labelRects.length=0;labelBuckets.clear();
   const lod=visualLod();
+  // 현재 선택 거점과 1단계 보급로 이웃은 축소 배율에서도 이름을 유지한다.
+  const connectedIds=showS11Connections&&selectedS11ConnectionId
+    ?new Set((S11_CONN_ADJ.get(selectedS11ConnectionId)||[]).map(([id])=>Number(id)))
+    :null;
   ctx.save();
 
   for(const s of D.states){
@@ -1788,10 +1813,10 @@ function drawAnnotations(){
     for(const g of (X.gates||[])){
       const p=tileCenterToScreen(g.x-1,g.y-1), sx=p[0], sy=p[1];
       if(sx<-100||sy<-70||sx>w+150||sy>h+70) continue;
-      ctx.save();ctx.globalAlpha=mixLod(1,.38,lod.strategy);
-      drawGateIcon(ctx,sx,sy,g.kind,mixLod(1,.62,lod.strategy));ctx.restore();
+      ctx.save();ctx.globalAlpha=mixLod(1,.56,lod.strategy);
+      drawGateIcon(ctx,sx,sy,g.kind,mixLod(1,.71,lod.strategy));ctx.restore();
       if(Number(g.id)===selectedS11ConnectionId)continue;
-      if(scale>.58){
+      if(scale>.68 || (showS11Connections&&connectedIds?.has(Number(g.id)))){
         const glabel=g.level?`${g.level} ${g.name}`:g.name;
         const gateY=claimLabel(ctx,glabel,'800 11px "Noto Sans KR",sans-serif',sx+13,sy-2,6,3);
         if(gateY!==null){
@@ -1821,20 +1846,21 @@ function drawAnnotations(){
       if(sx<-140||sy<-100||sx>w+180||sy>h+120) continue;
 
       const lv=Number(city.level||0);
-      const cityPinned=Number(city.id)===selectedS11ConnectionId || scoreOwners.has(String(city.id)) || landExportCities.has(String(city.id));
+      const near=!!connectedIds?.has(Number(city.id));
+      const cityPinned=Number(city.id)===selectedS11ConnectionId || near || scoreOwners.has(String(city.id)) || landExportCities.has(String(city.id));
       const majorCity=lv>=18 || cityPinned;
-      const iconAlpha=lod.strategy>.02?(majorCity?mixLod(1,.90,lod.strategy):mixLod(1,.16,lod.strategy)):1;
-      const iconScale=lod.strategy>.02?(majorCity?mixLod(1,.78,lod.strategy):mixLod(1,.54,lod.strategy)):1;
+      const iconAlpha=lod.strategy>.02?(majorCity?mixLod(1,.94,lod.strategy):mixLod(1,.47,lod.strategy)):1;
+      const iconScale=lod.strategy>.02?(majorCity?mixLod(1,.86,lod.strategy):mixLod(1,.65,lod.strategy)):1;
       ctx.save();ctx.globalAlpha=iconAlpha;drawCityIconScreen(ctx,sx,sy,city,iconScale);ctx.restore();
-      if(lod.strategy>.6 && lv<18 && Number(city.id)!==selectedS11ConnectionId &&
-         !scoreOwners.has(String(city.id)) && !landExportCities.has(String(city.id)))continue;
+      // 전국 축소에서는 주 이름을 우선한다. 20레벨·선택/보급로 인접 거점은 항상 표시.
+      if(lod.strategy>.78 && lv<20 && !cityPinned)continue;
+      if(lod.strategy>.70 && lv<18 && !cityPinned)continue;
       const label=lv?`${lv} ${city.name||rgn.n}`:(city.name||rgn.n);
       const fs=lv>=20?15:(lv>=13?13:12);
       const focused=Number(city.id)===selectedS11ConnectionId;
       // The selected facility gets its own top-most badge after all other
       // labels; reserve regular labels for non-selected facilities only.
       if(focused)continue;
-      const near=showS11Connections && !!(S11_CONN_ADJ.get(selectedS11ConnectionId)||[]).some(([id])=>id===Number(city.id));
       const font=`${focused?900:800} ${focused?fs+1:fs}px "Noto Sans KR",sans-serif`;
       const nameY=claimLabel(ctx,label,font,sx+14,sy-3,7,3,true);
       if(nameY!==null){
@@ -2242,28 +2268,29 @@ function drawS11ConnectionNetwork(g){
   const pixels=Object.create(null);
   for(const [id,node] of Object.entries(S11_CONN_NODES))pixels[id]=tileCenterToScreen(node[1]-1,node[2]-1);
   const focusActive=!!(selectedS11ConnectionId && S11_CONN_NODES[selectedS11ConnectionId]);
+  const lod=visualLod();
   g.save();g.lineCap='round';g.lineJoin='round';
-  // 보급로 전체망도 어느 정도 읽히도록 배경 윤곽선 + 속선을 함께 그린다.
-  // 직접 선택한 연결은 아래 별도 강조 레이어가 계속 담당한다.
+  // 전체망: 선택선보다 낮은 대비를 유지하되, 축소·중간에서도 길을 읽을 수 있게 한다.
+  // 선택 연결선(금색)은 별도 전경 레이어이므로 분명하게 구별된다.
   for(const mask of [3,1,2]){
-    g.beginPath();
+    g.beginPath();let count=0;
     for(const [a,b,m] of S11_CONN_EDGES){
       if(m!==mask)continue;
       const pa=pixels[a],pb=pixels[b];if(!pa||!pb)continue;
       if(Math.max(pa[0],pb[0]) < -35 || Math.min(pa[0],pb[0]) > width+35 ||
          Math.max(pa[1],pb[1]) < -35 || Math.min(pa[1],pb[1]) > height+35)continue;
-      g.moveTo(pa[0],pa[1]);g.lineTo(pb[0],pb[1]);
+      g.moveTo(pa[0],pa[1]);g.lineTo(pb[0],pb[1]);count++;
     }
-    g.setLineDash(mask===2?[4,5]:[]);
-    const outlineAlpha=focusActive?0.54:0.62;
-    const innerAlpha=focusActive?0.68:0.76;
-    const widthOuter=mask===3?2.45:(mask===1?2.35:2.25);
-    const widthInner=mask===3?1.36:(mask===1?1.30:1.22);
-    g.lineWidth=widthOuter;
-    g.strokeStyle=`rgba(12,20,29,${outlineAlpha})`;
+    if(!count)continue;
+    g.setLineDash(mask===2?[4.5,5.5]:[]);
+    const density=mixLod(1,.91,lod.strategy);
+    const outer=(focusActive?.48:.58)*density;
+    const inner=(focusActive?.72:.84)*density;
+    g.lineWidth=mask===3?2.75:2.50;
+    g.strokeStyle=`rgba(13,21,29,${outer})`;
     g.stroke();
-    g.lineWidth=widthInner;
-    g.strokeStyle=`rgba(196,222,233,${innerAlpha})`;
+    g.lineWidth=mask===3?1.52:1.4;
+    g.strokeStyle=`rgba(205,225,230,${inner})`;
     g.stroke();
   }
   g.restore();
@@ -2907,6 +2934,7 @@ const previewMap=document.createElement('canvas'), previewFx=document.createElem
 const previewMapCtx=previewMap.getContext('2d'), previewFxCtx=previewFx.getContext('2d');
 let previewBaseScale=scale, previewBaseOx=ox, previewBaseOy=oy;
 let dragStartX=0, dragStartY=0, dragBaseOx=0, dragBaseOy=0;
+let dragPreviewCaptured=false;
 let zoomPreviewActive=false, zoomCommitTimer=0;
 let pendingHoverClientX=0, pendingHoverClientY=0;
 let lastHoverSignature='';
@@ -2981,13 +3009,15 @@ map.addEventListener('pointerdown',e=>{
   lastX=e.clientX; lastY=e.clientY;
   dragStartX=e.clientX; dragStartY=e.clientY;
   dragBaseOx=ox; dragBaseOy=oy;
-  capturePreview();
+  dragPreviewCaptured=false; // 클릭 시에는 대형 캔버스를 복사하지 않는다.
   map.setPointerCapture(e.pointerId);
 });
 map.addEventListener('pointermove',e=>{
   if(dragging){
     const dx=e.clientX-dragStartX, dy=e.clientY-dragStartY;
     if(Math.abs(dx)+Math.abs(dy)>2) moved=true;
+    if(!moved)return;
+    if(!dragPreviewCaptured){capturePreview();dragPreviewCaptured=true;}
     ox=dragBaseOx+dx; oy=dragBaseOy+dy;
     lastX=e.clientX; lastY=e.clientY;
     schedulePreview();
