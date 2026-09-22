@@ -1660,7 +1660,9 @@ function paintOverlayPixel(i,p,ps,pn,pref){
   else if(showResource&&pref.mode==='uniform'&&pref.color){[r,g,b]=pref.color;aLow=200;aHi=238;}
   else if(showResource&&group===2){[r,g,b]=palette.high;aLow=216;aHi=247;}
   else if(showResource&&group===1){[r,g,b]=RESOURCE_LEVEL9_COLOR;aLow=190;aHi=238;}
-  else if(showResource&&group===0){r=115;g=140;b=82;aLow=13;aHi=69;}
+  // 저레벨 토지는 산(#26282F)과 분리되는 밝은 황록색을 사용한다.
+  // 원본 자원 종류·레벨·토지 좌표/통행 판정은 변경하지 않는다.
+  else if(showResource&&group===0){r=187;g=213;b=112;aLow=142;aHi=216;}
   else if(t===0){r=115;g=140;b=82;aLow=13;aHi=69;}
   else{r=174;g=116;b=59;aLow=68;aHi=107;}
   if(showResource&&pref.soft){
@@ -1670,7 +1672,7 @@ function paintOverlayPixel(i,p,ps,pn,pref){
   p[j]=r;p[j+1]=g;p[j+2]=b;p[j+3]=aLow;
   // 원본 짝수 X 반칸 보정 유지. 두 고배율 캔버스는 서로 다른 열만 가진다.
   const dst=((i%W)&1)===0?ps:pn;
-  if(t===0&&showResource&&group===0&&pref.mode==='level'){dst[j]=92;dst[j+1]=128;dst[j+2]=75;}
+  if(t===0&&showResource&&group===0&&pref.mode==='level'){dst[j]=187;dst[j+1]=213;dst[j+2]=112;}
   else if(t===0&&rr!==0&&group<0){dst[j]=92;dst[j+1]=128;dst[j+2]=75;}
   else{dst[j]=r;dst[j+1]=g;dst[j+2]=b;}
   dst[j+3]=aHi;
