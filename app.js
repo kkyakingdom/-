@@ -381,7 +381,11 @@ const mapPerf={draws:0,baseCacheHits:0,baseCacheMisses:0,previewFrames:0,lastDra
 Object.defineProperty(window,'__S11MapPerf',{value:mapPerf,configurable:false});
 function invalidateBaseCache(){
   cachedBaseRevision++;cachedBaseKey='';
-  for(const entry of baseCacheEntries){entry.canvas.width=0;entry.canvas.height=0;}
+  // Retain the currently displayed terrain until the replacement frame is
+  // ready; clearing a DOM-backed canvas immediately creates a blank map.
+  for(const entry of baseCacheEntries){
+    if(entry!==visibleBaseEntry){entry.canvas.width=0;entry.canvas.height=0;}
+  }
   baseCacheEntries.length=0;
 }
 function baseMargin(){return Math.max(96,Math.min(300,Math.round(Math.min(map.clientWidth,map.clientHeight)*0.32)));}
@@ -400,10 +404,36 @@ function findBaseCache(allowEdge=false){
   }
   return null;
 }
-function paintCachedBase(g,entry){
-  const sx=Math.round((entry.margin+entry.ox-ox)*renderDpr),sy=Math.round((entry.margin+entry.oy-oy)*renderDpr);
-  g.drawImage(entry.canvas,sx,sy,map.width,map.height,0,0,map.clientWidth,map.clientHeight);
+// The opaque overscanned base IS the visible background layer. Do not copy
+// several million pixels from one canvas into the viewport canvas on EVERY
+// pan/zoom commit. The normal map canvas stays transparent for live labels,
+// icons, links and routes, and keeps its existing pointer hit-testing.
+let visibleBaseEntry=null;
+function presentCachedBase(entry){
+  const canvas=entry.canvas;
+  const sx=Math.round((entry.margin+entry.ox-ox)*renderDpr)/renderDpr;
+  const sy=Math.round((entry.margin+entry.oy-oy)*renderDpr)/renderDpr;
+  if(visibleBaseEntry!==entry){
+    if(visibleBaseEntry){
+      const previous=visibleBaseEntry.canvas;
+      previous.remove();previous.style.cssText='';
+      if(!baseCacheEntries.includes(visibleBaseEntry)){
+        // An invalidated bitmap no longer belongs to the LRU. Release it
+        // only AFTER the replacement is on screen.
+        previous.width=0;previous.height=0;
+      }
+    }
+    canvas.style.cssText=`position:absolute;left:${-sx}px;top:${-sy}px;width:${entry.cssWidth}px;height:${entry.cssHeight}px;pointer-events:none;transform-origin:0 0;`;
+    map.parentElement.insertBefore(canvas,map);
+    visibleBaseEntry=entry;
+  }else{
+    canvas.style.left=(-sx)+'px';canvas.style.top=(-sy)+'px';
+  }
 }
+// Kept as a no-op compatibility hook: the source bitmap is itself the visible
+// raster. Other overlays still render onto their original canvases.
+function paintCachedBase(g,entry){presentCachedBase(entry);}
+
 // The original cache layout and all colors/terrain layers are preserved.  During
 // wheel zoom its five expensive paint passes run on separate frames, so a single
 // wheel-end frame does not have to build a large canvas and redraw the map.
@@ -421,6 +451,9 @@ function paintBaseCachePass(job){
   const {entry,g}=job;
   const beforeView=activeWorldView,beforeOx=ox,beforeOy=oy;
   try{
+    // Cache passes may run across several animation frames while a pointer is
+    // still moving. Draw every pass using this job's ORIGINAL camera snapshot.
+    ox=job.ox;oy=job.oy;
     activeWorldView=viewportWorldBounds(8,entry.margin);
     ox+=entry.margin;oy+=entry.margin;
     g.setTransform(renderDpr,0,0,renderDpr,0,0);
@@ -442,7 +475,13 @@ function paintBaseCachePass(job){
 function retainBaseCache(entry){
   baseCacheEntries.push(entry);
   while(baseCacheEntries.length>2){
-    const old=baseCacheEntries.shift();old.canvas.width=0;old.canvas.height=0;
+    // The active DOM background may not be evicted until presentCachedBase()
+    // swaps it with the newly painted canvas. Otherwise zoom ends in a blank
+    // background when an old, still visible, LRU item is recycled.
+    let index=baseCacheEntries.findIndex(e=>e!==visibleBaseEntry&&e!==entry);
+    if(index<0)break;
+    const old=baseCacheEntries.splice(index,1)[0];
+    old.canvas.width=0;old.canvas.height=0;
   }
   return entry;
 }
@@ -3301,6 +3340,8 @@ const previewMapCtx=previewMap.getContext('2d'), previewFxCtx=previewFx.getConte
 let previewBaseScale=scale, previewBaseOx=ox, previewBaseOy=oy;
 let dragStartX=0, dragStartY=0, dragBaseOx=0, dragBaseOy=0;
 let dragPreviewCaptured=false,pendingDragRefresh=false;
+let dragFrameRAF=0,dragCacheJob=null,dragCacheRAF=0,dragCacheSerial=0,dragCommitActive=false;
+let dragVisualBaseOx=0,dragVisualBaseOy=0,dragUnderlay=null;
 let zoomPreviewActive=false, zoomCommitTimer=0;
 // Cancelable, frame-sliced wheel commit: keep the last complete bitmap visible
 // while preparing an exact, full-quality terrain/border cache for the new zoom.
@@ -3369,6 +3410,9 @@ const wheelLayers=[map,scoreShadeCanvas,fx];
 // copy or extra cache generation on the wheel input path.
 let wheelUnderlay=null;
 function attachWheelUnderlay(){
+  // The current background cache is already a full overscanned DOM layer.
+  // No second canvas should be inserted behind it.
+  if(visibleBaseEntry)return;
   if(wheelUnderlay)return;
   const entry=findBaseCache(true);
   if(!entry||!entry.canvas.width)return;
@@ -3384,6 +3428,12 @@ function setWheelLayerTransform(){
   const dx=(ox+CX*scale)-ratio*oldAx,dy=(oy+CY*scale)-ratio*oldAy;
   const transform=`translate3d(${dx}px,${dy}px,0) scale(${ratio})`;
   for(const canvas of wheelLayers)canvas.style.transform=transform;
+  if(visibleBaseEntry){
+    const entry=visibleBaseEntry,sx=entry.margin+entry.ox-wheelBaseOx,sy=entry.margin+entry.oy-wheelBaseOy;
+    const base=entry.canvas;
+    base.style.willChange='transform';
+    base.style.transform=`translate3d(${dx+(1-ratio)*sx}px,${dy+(1-ratio)*sy}px,0) scale(${ratio})`;
+  }
   // A layer positioned at (-sx,-sy) needs a local translation correction to
   // undergo the exact same screen-space transform as the viewport canvases.
   if(wheelUnderlay){
@@ -3393,7 +3443,91 @@ function setWheelLayerTransform(){
 }
 function clearWheelLayerTransform(){
   for(const canvas of wheelLayers){canvas.style.transform='';canvas.style.willChange='';}
+  if(visibleBaseEntry){visibleBaseEntry.canvas.style.transform='';visibleBaseEntry.canvas.style.willChange='';}
   if(wheelUnderlay){wheelUnderlay.canvas.remove();wheelUnderlay.canvas.style.cssText='';wheelUnderlay=null;}
+}
+// Drag compositor fast path: move existing map, score shade and selection as a
+// group. No full-viewport canvas copies or canvas clear/drawImage per mousemove.
+// The surrounding overscan buffer is a visual underlay, not a new map layer.
+function clearDragLayerTransform(){
+  if(dragFrameRAF){cancelAnimationFrame(dragFrameRAF);dragFrameRAF=0;}
+  for(const canvas of wheelLayers){canvas.style.transform='';canvas.style.willChange='';}
+  if(visibleBaseEntry){visibleBaseEntry.canvas.style.transform='';visibleBaseEntry.canvas.style.willChange='';}
+  if(dragUnderlay){dragUnderlay.canvas.remove();dragUnderlay.canvas.style.cssText='';dragUnderlay=null;}
+  dragPreviewCaptured=false;
+}
+function beginDragLayerPreview(){
+  if(dragPreviewCaptured)return;
+  dragPreviewCaptured=true;
+  dragVisualBaseOx=ox;dragVisualBaseOy=oy;
+  for(const canvas of wheelLayers){canvas.style.transformOrigin='0 0';canvas.style.willChange='transform';}
+  const entry=visibleBaseEntry?null:findBaseCache(true);
+  if(entry&&entry.canvas.width){
+    const sx=entry.margin+entry.ox-ox,sy=entry.margin+entry.oy-oy;
+    const canvas=entry.canvas;
+    canvas.style.cssText=`position:absolute;left:${-sx}px;top:${-sy}px;width:${entry.cssWidth}px;height:${entry.cssHeight}px;pointer-events:none;transform-origin:0 0;will-change:transform;`;
+    map.parentElement.insertBefore(canvas,map);
+    dragUnderlay={canvas,sx,sy};
+  }
+}
+function flushDragTransform(){
+  dragFrameRAF=0;
+  if(!dragging||!dragPreviewCaptured)return;
+  const dx=ox-dragVisualBaseOx,dy=oy-dragVisualBaseOy;
+  const transform=`translate3d(${dx}px,${dy}px,0)`;
+  for(const canvas of wheelLayers)canvas.style.transform=transform;
+  if(visibleBaseEntry)visibleBaseEntry.canvas.style.transform=transform;
+  if(dragUnderlay)dragUnderlay.canvas.style.transform=transform;
+  mapPerf.previewFrames++;
+}
+function scheduleDragTransform(){if(!dragFrameRAF)dragFrameRAF=requestAnimationFrame(flushDragTransform);}
+function cancelDragCacheJob(){
+  dragCacheSerial++;
+  if(dragCacheRAF){cancelAnimationFrame(dragCacheRAF);dragCacheRAF=0;}
+  if(dragCacheJob){dragCacheJob.entry.canvas.width=0;dragCacheJob.entry.canvas.height=0;dragCacheJob=null;}
+}
+function stageDragCache(){
+  if((!dragging&&!dragCommitActive)||!moved||dragCacheJob||zoomPreviewActive)return;
+  // Prefetch a FRESH buffer near the overscan edge, even while the old buffer
+  // still covers the viewport. Waiting for a cache miss reveals dark gaps.
+  const job=createBaseCacheJob(),serial=++dragCacheSerial;
+  dragCacheJob=job;
+  function pass(){
+    dragCacheRAF=0;
+    if(serial!==dragCacheSerial||(!dragging&&!dragCommitActive)||!moved||zoomPreviewActive||dragCacheJob!==job||
+       job.scale!==scale||job.revision!==cachedBaseRevision||job.entry.key!==baseCacheConfigKey()){
+      if(dragCacheJob===job)cancelDragCacheJob();
+      return;
+    }
+    // Each world-layer/boundary pass sees job.ox and job.oy, even as the pointer moves.
+    const start=performance.now();
+    paintBaseCachePass(job);
+    mapPerf.dragCachePassMs.push(Math.round((performance.now()-start)*10)/10);
+    if(mapPerf.dragCachePassMs.length>20)mapPerf.dragCachePassMs.shift();
+    if(job.step<7){dragCacheRAF=requestAnimationFrame(pass);return;}
+    // A very fast pan can move outside the new buffer while it is being built.
+    // Keep the old preview and wait for the next pointer movement instead of
+    // committing an expensive cache miss or showing a mismatched position.
+    const entry=job.entry,sx=entry.margin+entry.ox-ox,sy=entry.margin+entry.oy-oy;
+    if(sx<2||sy<2||sx+map.clientWidth>entry.cssWidth-2||sy+map.clientHeight>entry.cssHeight-2){
+      cancelDragCacheJob();
+      if(dragCommitActive)dragCacheRAF=requestAnimationFrame(stageDragCache);
+      return;
+    }
+    dragCacheJob=null;
+    clearDragLayerTransform();
+    retainBaseCache(entry);
+    dragCommitActive=false;
+    draw(); // cache HIT: labels and overlays update without regenerating terrain.
+    if(dragging)beginDragLayerPreview();
+  }
+  dragCacheRAF=requestAnimationFrame(pass);
+}
+mapPerf.dragCachePassMs=[];
+function finishDragPreview(){
+  dragCommitActive=false;
+  cancelDragCacheJob();
+  clearDragLayerTransform();
 }
 let pendingWheelRAF=0,pendingWheelDelta=0,pendingWheelX=0,pendingWheelY=0;
 let pendingHoverClientX=0, pendingHoverClientY=0;
@@ -3487,7 +3621,9 @@ function scheduleSelectionDraw(clientX,clientY){
 }
 
 map.addEventListener('pointerdown',e=>{
+  if(dragCommitActive){finishDragPreview();draw();}
   if(zoomPreviewActive) commitPreview();
+  finishDragPreview();
   dragging=true; moved=false;
   lastX=e.clientX; lastY=e.clientY;
   dragStartX=e.clientX; dragStartY=e.clientY;
@@ -3500,25 +3636,16 @@ map.addEventListener('pointermove',e=>{
     const dx=e.clientX-dragStartX, dy=e.clientY-dragStartY;
     if(Math.abs(dx)+Math.abs(dy)>2) moved=true;
     if(!moved)return;
-    if(!dragPreviewCaptured){capturePreview();dragPreviewCaptured=true;}
+    if(!dragPreviewCaptured)beginDragLayerPreview();
     ox=dragBaseOx+dx; oy=dragBaseOy+dy;
     lastX=e.clientX; lastY=e.clientY;
-    schedulePreview();
-    // A full refresh in pointermove blocked input; schedule it after the fast preview.
-    // The base overscan makes normal pans a cheap crop instead of a redraw.
-    const refreshAt=Math.max(260,Math.min(map.clientWidth,map.clientHeight)*0.32);
-    if(Math.max(Math.abs(dx),Math.abs(dy))>refreshAt){
-      const refreshX=e.clientX,refreshY=e.clientY;
-      if(!pendingDragRefresh){
-        pendingDragRefresh=true;
-        requestAnimationFrame(()=>{
-          pendingDragRefresh=false;
-          if(!dragging||zoomPreviewActive)return;
-          cancelPreviewFrame();draw();capturePreview();
-          dragStartX=lastX;dragStartY=lastY;
-          dragBaseOx=ox;dragBaseOy=oy;
-        });
-      }
+    scheduleDragTransform();
+    // Start painting a replacement overscan buffer BEFORE the old one runs out.
+    // A staged cache update is limited to one base pass per frame and never
+    // blocks the high-frequency pointermove callback with a full map redraw.
+    const distance=Math.max(Math.abs(ox-dragVisualBaseOx),Math.abs(oy-dragVisualBaseOy));
+    if(distance>Math.max(90,baseMargin()*0.68)&&!dragCacheJob){
+      stageDragCache();
     }
     return;
   }
@@ -3527,6 +3654,21 @@ map.addEventListener('pointermove',e=>{
   scheduleSelectionDraw(e.clientX,e.clientY);
 });
 map.addEventListener('pointerup',e=>{
+  // A real pan is finished as soon as the button is released. If precise
+  // terrain is not yet cached, keep the compositor preview visible and finish
+  // the remaining expensive passes over several frames (never in pointerup).
+  if(dragging&&moved){
+    dragging=false;
+    if(findBaseCache()){
+      finishDragPreview();draw();
+    }else{
+      dragCommitActive=true;
+      if(!dragCacheJob)stageDragCache();
+    }
+    return;
+  }
+  // Restore real canvas coordinates BEFORE any click/selection branch returns.
+  if(dragging)finishDragPreview();
   if(dragging && !moved){
     const [mx,my]=toMap(e.clientX,e.clientY), code=regionAt(mx,my);
     // 정철 계산기가 열려 있으면 경로 탐색 모드가 이전부터 켜져 있었더라도
@@ -3593,7 +3735,11 @@ map.addEventListener('pointerup',e=>{
   }
   dragging=false;
 });
-map.addEventListener('pointercancel',()=>{ if(dragging){ cancelPreviewFrame(); draw(); } dragging=false; });
+map.addEventListener('pointercancel',()=>{ if(dragging){ finishDragPreview(); dragging=false; draw(); } });
+// A missed pointerup (window focus loss or a lost capture) must never leave
+// the map in a permanently dragging state.
+map.addEventListener('lostpointercapture',()=>{if(dragging){finishDragPreview();dragging=false;draw();}});
+window.addEventListener('blur',()=>{if(dragging){finishDragPreview();dragging=false;draw();}});
 map.addEventListener('pointerleave',hideHoverTileInfo);
 map.addEventListener('dblclick',e=>{
   e.preventDefault();
@@ -3632,6 +3778,8 @@ function flushWheelZoom(){
   zoomCommitTimer=setTimeout(prepareWheelCommit,delta>0?80:135);
 }
 map.parentElement.addEventListener('wheel',e=>{
+  if(dragging)return;
+  if(dragCommitActive){finishDragPreview();draw();}
   // Do not hijack scrolling in floating menus or input panels.
   if(e.target!==map && e.target!==map.parentElement)return;
   e.preventDefault();
