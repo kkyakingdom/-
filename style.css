@@ -864,3 +864,25 @@ html,body{background:#0b1215;color:var(--text)}
 .scoreShadeSwitch input:focus-visible+.scoreShadeKnob{outline:2px solid #ffe79b;outline-offset:3px}
 .scoreShadeState::after{content:'OFF';color:#bbb0b9}
 .scoreShadeSwitch input:checked~.scoreShadeState::after{content:'ON';color:#f0d5ff}
+
+/* v22.9.45: distinctly styled state/county boundaries and independent facility markers. */
+.commanderyRangeLine{border-top:3px solid #ffcf7e!important;box-shadow:0 -1px #20150d}
+.stateRangeLine{border-top:4px dashed #b7edff!important;box-shadow:0 -1px #061321}
+.markerLegendPanel{position:fixed;z-index:44;width:min(254px,calc(100vw - 16px));overflow-y:auto;border:1px solid #b78e4c;border-radius:12px;background:rgba(23,18,13,.98);color:#f5e8cc;box-shadow:0 12px 36px rgba(0,0,0,.58);padding:10px;scrollbar-width:thin}
+.markerLegendPanel[hidden]{display:none!important}
+.markerLegendTitle{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:#f3d696;font-size:13px}
+.markerLegendTitle button{width:26px;height:26px;border:1px solid #745939;border-radius:7px;background:#392918;color:#f7e2b8;font-size:19px;line-height:1}
+.markerLegendOptions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.markerLegendOptions label{display:flex;align-items:center;gap:5px;padding:8px 6px;border:1px solid #59482f;border-radius:8px;background:#2b2219;font-size:12px;cursor:pointer;white-space:nowrap}
+.markerLegendOptions label:has(input:focus-visible){outline:2px solid #f1d18d}
+.markerLegendOptions input{margin:0;accent-color:#e7c477;width:14px;height:14px;flex:none}
+.markerLegendOptions label:has(input:not(:checked)){color:#9e937e;background:#201b16}
+.markerLegendIcon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;font-size:14px;line-height:1;flex:none}
+.markerLegendIcon.fortress{color:#eac594}.markerLegendIcon.mountain_path{color:#b4db93}.markerLegendIcon.bridge{color:#a9dce9}.markerLegendIcon.dock{color:#80c7eb}.markerLegendIcon.chokepoint{color:#ffd57a}
+.markerLegendPrevRange{display:inline-block;width:17px;border-top:2px dashed #ffe24a;flex:none}
+.markerLegendBoundaries{display:flex;justify-content:space-between;gap:8px;padding:10px 3px 1px;margin-top:10px;border-top:1px solid #655034;font-size:11px;color:#e8d8b7}
+.markerLegendBoundaries span{display:flex;align-items:center;gap:5px;white-space:nowrap}
+.markerLegendBoundaries i{width:22px;display:inline-block;flex:none}
+.markerStateSample{border-top:4px dashed #b7edff}.markerCountySample{border-top:3px solid #ffcf7e}
+#markerLegendToggleBtn.active{border-color:#edce8e;background:#514024;color:#fff0c5}
+@media(max-width:600px){#topbar .top-actions #markerLegendToggleBtn{order:2;padding:6px 7px;font-size:11px}.markerLegendPanel{width:min(254px,calc(100vw - 16px))}}

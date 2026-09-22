@@ -18,6 +18,32 @@ let showS11Connections=false, selectedS11ConnectionId=0;
 // 성지 주민 수 상한과 패업 점수는 사용자가 제공한 레벨별 기준표를 기본값으로 사용한다.
 // 현재 주민 수는 실시간 데이터가 아니므로 확인되지 않은 경우 비워 두며, 수동 입력은 이 브라우저에만 저장한다.
 const CITY_STATS_KEY='s11_city_stats_manual_v1';
+// 사용자 확인 레벨별 기본 내구도. 성지 본체 및 관문의 표시값만 추가한다.
+const DURABILITY_BY_LEVEL=Object.freeze({4:200000,6:400000,8:800000,9:800000,10:1500000,11:1000000,13:1500000,14:1500000,15:2000000,16:1800000,18:2400000,20:1200000});
+const DURABILITY_STORAGE_KEY='s11_structure_durability_manual_v1';
+let manualDurability={};
+try{
+  const saved=JSON.parse(localStorage.getItem(DURABILITY_STORAGE_KEY)||'{}');
+  if(saved&&typeof saved==='object'&&!Array.isArray(saved))manualDurability=saved;
+}catch(_){/* 저장 데이터가 손상된 경우 레벨별 기본값 사용 */}
+function durabilityValue(raw){
+  if(raw===null||raw===undefined||raw==='')return null;
+  const n=Number(raw);
+  return Number.isSafeInteger(n)&&n>=0&&n<=1000000000?n:null;
+}
+function facilityDurability(kind,facility){
+  const key=kind+':'+String(facility.id);
+  const own=Object.prototype.hasOwnProperty.call(manualDurability,key)?durabilityValue(manualDurability[key]):null;
+  return own===null?(DURABILITY_BY_LEVEL[Number(facility.level)]??null):own;
+}
+function durabilityText(value){return value===null?'미확인':value.toLocaleString('ko-KR');}
+function saveFacilityDurability(kind,facility,value){
+  const key=kind+':'+String(facility.id);
+  if(value===null)delete manualDurability[key];
+  else manualDurability[key]=value;
+  localStorage.setItem(DURABILITY_STORAGE_KEY,JSON.stringify(manualDurability));
+}
+
 const CITY_STATS_REFERENCE=window.S3MAP_CITY_STATS||{};
 const CITY_BY_ID=new Map(Object.values(R).filter(r=>r.city).map(r=>[String(r.city.id),r.city]));
 // Locate the exact region code for each score city. Do not approximate city borders with squares.
@@ -230,12 +256,20 @@ function cityStatsMarkup(city){
   const v=currentCityStats(city);
   const residents=v.capacity===null?'미확인':v.capacity.toLocaleString('ko-KR');
   const score=v.score===null?'미확인':v.score.toLocaleString('ko-KR');
-  return `<div class="cityStats" data-city-id="${city.id}"><div class="cityStatsRows"><div class="k">주민 수</div><div class="v">${residents}</div><div class="k">패업 점수</div><div class="v">${score}</div></div><button type="button" class="cityStatsEdit" data-city-stats-edit>수치 입력/수정</button></div>`;
+  return `<div class="cityStats" data-city-id="${city.id}"><div class="cityStatsRows"><div class="k">주민 수</div><div class="v">${residents}</div><div class="k">패업 점수</div><div class="v">${score}</div><div class="k">내구도</div><div class="v">${durabilityText(facilityDurability('city',city))}</div></div><button type="button" class="cityStatsEdit" data-city-stats-edit>수치 입력/수정</button></div>`;
 }
 function cityStatsForm(city){
   const v=currentCityStats(city);
   const num=n=>n===null?'':String(n);
-  return `<form class="cityStatsForm" data-city-stats-form><div class="cityStatsFormGrid"><label>현재 주민 수<input name="residents" type="number" inputmode="numeric" min="0" max="1000000" step="1" placeholder="미확인" value="${num(v.residents)}"></label><label>주민 상한<input name="capacity" type="number" inputmode="numeric" min="0" max="1000000" step="1" placeholder="미확인" value="${num(v.capacity)}"></label><label>패업 점수<input name="score" type="number" inputmode="numeric" min="0" max="1000000" step="1" placeholder="미확인" value="${num(v.score)}"></label></div><p class="cityStatsError" role="alert" hidden></p><div class="cityStatsFormActions"><button type="submit">저장</button><button type="button" data-city-stats-cancel>취소</button><button type="button" data-city-stats-reset title="직접 입력한 값을 지우고 확인된 기본 자료로 복원">입력값 지우기</button></div></form>`;
+  return `<form class="cityStatsForm" data-city-stats-form><div class="cityStatsFormGrid"><label>현재 주민 수<input name="residents" type="number" inputmode="numeric" min="0" max="1000000" step="1" placeholder="미확인" value="${num(v.residents)}"></label><label>주민 상한<input name="capacity" type="number" inputmode="numeric" min="0" max="1000000" step="1" placeholder="미확인" value="${num(v.capacity)}"></label><label>패업 점수<input name="score" type="number" inputmode="numeric" min="0" max="1000000" step="1" placeholder="미확인" value="${num(v.score)}"></label><label>내구도<input name="durability" type="number" inputmode="numeric" min="0" max="1000000000" step="1" placeholder="레벨 기본값" value="${num(facilityDurability('city',city))}"></label></div><p class="cityStatsError" role="alert" hidden></p><div class="cityStatsFormActions"><button type="submit">저장</button><button type="button" data-city-stats-cancel>취소</button><button type="button" data-city-stats-reset title="직접 입력한 값을 지우고 확인된 기본 자료로 복원">입력값 지우기</button></div></form>`;
+}
+const GATE_BY_ID=new Map((X.gates||[]).map(g=>[String(g.id),g]));
+function gateDurabilityMarkup(gate){
+  return `<div class="cityStats gateDurability" data-gate-id="${gate.id}"><div class="cityStatsRows"><div class="k">내구도</div><div class="v">${durabilityText(facilityDurability('gate',gate))}</div></div><button type="button" class="cityStatsEdit" data-gate-durability-edit>내구도 수정</button></div>`;
+}
+function gateDurabilityForm(gate){
+  const v=facilityDurability('gate',gate);
+  return `<form class="cityStatsForm" data-gate-durability-form><div class="cityStatsFormGrid"><label>내구도<input name="durability" type="number" inputmode="numeric" min="0" max="1000000000" step="1" required value="${v===null?'':v}"></label></div><p class="cityStatsError" role="alert" hidden></p><div class="cityStatsFormActions"><button type="submit">저장</button><button type="button" data-gate-durability-cancel>취소</button><button type="button" data-gate-durability-reset title="레벨별 기본 내구도로 복원">입력값 지우기</button></div></form>`;
 }
 const CITY_BY_COORD=new Map(Object.entries(R).filter(([,r])=>r.city?.x!=null&&r.city?.y!=null).map(([code,r])=>[`${r.city.x-1},${r.city.y-1}`,code]));
 
@@ -588,6 +622,16 @@ function hideHoverTileInfo(){
 
 let labelMode=true, cityMode=true, borderMode=true, shadeMode=true, showMini=false;
 let showGates=true, showTransports=true, showTerrain=true, showGrid=true;
+// Visual-only legend switches; these never change terrain classification, clicking or route rules.
+const MARKER_LEGEND_PREF_KEY='s11_marker_legend_visibility_v1';
+const markerVisibility={fortress:true,mountain_path:true,bridge:true,dock:true,chokepoint:true,prevRange:true};
+try{
+  const previous=JSON.parse(localStorage.getItem(MARKER_LEGEND_PREF_KEY)||'{}');
+  if(previous&&typeof previous==='object')for(const key of Object.keys(markerVisibility)){
+    if(typeof previous[key]==='boolean')markerVisibility[key]=previous[key];
+  }
+}catch(_){/* keep every layer visible if storage is unavailable */}
+
 // 자원 표시: 1~8레벨은 기존색, 9레벨은 종류 공통 강조색, 10~12레벨은 종류별 강조색.
 // 오른쪽 '자원 토지 색상' 범례와 동일한 규칙을 사용한다.
 const RESOURCE_LEVEL_COLORS={
@@ -806,22 +850,24 @@ function drawTerritoryRanges(g,part='all'){
   const inv=Math.max(0.0001,1/scale);
   const lod=visualLod();
 
-  // 1. 성지(소지역) 경계: 지형 뒤로 물러나는 가느다란 점선.
+  // 1. 성지(소지역) 경계: 어두운 지형에서도 식별되도록 밝은 미색 점선의 선명도만 높인다.
+  // 전체 보기에서는 주·군 경계가 우선하도록 성지 경계의 불투명도를 제한한다.
   if(part==='all'||part==='region'){
-    g.setLineDash([2.3*inv,5.8*inv]);
-    g.lineWidth=mixLod(.48,1.05,lod.detail)*inv;
-    g.strokeStyle=`rgba(213,219,211,${mixLod(.06,.46,1-lod.strategy)})`;
+    g.setLineDash([3.0*inv,4.8*inv]);
+    g.lineWidth=mixLod(1.05,1.85,lod.detail)*inv;
+    g.strokeStyle=`rgba(238,232,203,${mixLod(.28,.91,1-lod.strategy)})`;
     strokeBoundary(g,regionBoundaryPath,regionBoundaryChunks);
   }
 
   // 2. 군 경계: 주 경계와 구분되는 차분한 호박색. 지형 위에서 읽히는 얇은 그림자 선.
   if(part==='all'||part==='commandery'){
     g.setLineDash([]);
-    g.lineWidth=mixLod(1.8,3.2,1-lod.strategy)*inv;
-    g.strokeStyle=`rgba(32,24,20,${mixLod(.20,.50,1-lod.strategy)})`;
+    // County: continuous honey-gold line with a dark outer halo, distinct from river paths.
+    g.lineWidth=mixLod(3.2,5.2,1-lod.strategy)*inv;
+    g.strokeStyle=`rgba(32,21,13,${mixLod(.42,.82,1-lod.strategy)})`;
     strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
-    g.lineWidth=mixLod(.9,1.85,1-lod.strategy)*inv;
-    g.strokeStyle=`rgba(201,145,96,${mixLod(.24,.80,1-lod.strategy)})`;
+    g.lineWidth=mixLod(1.4,2.8,1-lod.strategy)*inv;
+    g.strokeStyle=`rgba(255,207,126,${mixLod(.52,.98,1-lod.strategy)})`;
     strokeBoundary(g,commanderyBoundaryPath,commanderyBoundaryChunks);
   }
 
@@ -829,12 +875,13 @@ function drawTerritoryRanges(g,part='all'){
   // 같은 dash pattern을 써서 물길처럼 보이는 연속된 검은 띠가 남지 않게 한다.
   if((part==='all'||part==='state')&&(stateBoundaryDashedPath||stateBoundaryPath)){
     const statePath=stateBoundaryDashedPath||stateBoundaryPath;
-    g.setLineDash([11*inv,7*inv]);
-    g.lineWidth=mixLod(4.8,7.4,lod.strategy)*inv;
-    g.strokeStyle='rgba(9,17,23,.96)';
+    // State: larger sky-blue dashes over a navy outline, visually above county lines.
+    g.setLineDash([13*inv,7*inv]);
+    g.lineWidth=mixLod(6.1,8.2,lod.strategy)*inv;
+    g.strokeStyle='rgba(6,19,33,.96)';
     g.stroke(statePath);
-    g.lineWidth=mixLod(2.45,3.45,lod.strategy)*inv;
-    g.strokeStyle='rgba(239,246,247,.99)';
+    g.lineWidth=mixLod(3.35,4.35,lod.strategy)*inv;
+    g.strokeStyle='rgba(183,237,255,.99)';
     g.stroke(statePath);
     g.setLineDash([]);
   }
@@ -879,6 +926,7 @@ function getHolySitePrevRangePath(){
   return holySitePrevRangePath;
 }
 function drawHolySitePrevRanges(g){
+  if(!markerVisibility.prevRange)return;
   const path=getHolySitePrevRangePath();
   if(!path) return;
   g.save();
@@ -2040,18 +2088,15 @@ function drawAnnotations(){
     :null;
   ctx.save();
 
-  for(const s of D.states){
-    const c=stateCenters[s], p=worldToScreen(c[0],c[1]), sx=p[0], sy=p[1];
-    if(sx<-120||sy<-80||sx>w+120||sy>h+80) continue;
-    const fs=Math.round(mixLod(17,Math.max(26,Math.min(39,31*scale/.52)),lod.strategy));
-    const stateFont=`900 ${fs}px "Noto Sans KR",sans-serif`;
-    if(lod.strategy>.35){
-      ctx.font=stateFont;const bw=ctx.measureText(s).width+22;
-      ctx.fillStyle=`rgba(12,19,22,${.08+.25*lod.strategy})`;
-      ctx.fillRect(sx-bw/2,sy-fs*.71,bw,fs*1.48);
+  // At close/mid zoom, retain the original understated state names.
+  // At wide zoom, draw all state names last so cities, borders and their badges cannot obscure them.
+  if(lod.strategy<=.23){
+    for(const s of D.states){
+      const c=stateCenters[s], p=worldToScreen(c[0],c[1]), sx=p[0], sy=p[1];
+      if(sx<-120||sy<-80||sx>w+120||sy>h+80)continue;
+      drawTextHalo(ctx,s,sx,sy,'900 17px "Noto Sans KR",sans-serif',
+        'rgba(255,244,211,.76)','rgba(20,23,22,.94)',4);
     }
-    drawTextHalo(ctx,s,sx,sy,stateFont,
-      `rgba(255,244,211,${.72+.26*lod.strategy})`,'rgba(20,23,22,.94)',Math.max(4,fs*.2));
   }
 
   // 성지가 없는 지역에만 일반 지역명 표시.
@@ -2136,7 +2181,7 @@ function drawAnnotations(){
     }
   }
 
-  if(showTransports){
+  if(showTransports&&markerVisibility.dock){
     for(const p0 of (X.docks||[])){
       const p=tileCenterToScreen(p0.x-1,p0.y-1), sx=p[0], sy=p[1];
       if(sx<-80||sy<-60||sx>w+120||sy>h+60) continue;
@@ -2158,6 +2203,7 @@ function drawAnnotations(){
       ['mountain_path',X.mountainPaths||[],'산길','#ECE4C7']
     ];
     for(const [kind,arr,label,color] of groups){
+      if(!markerVisibility[kind])continue;
       for(const s0 of arr){
         const q=structureWorldTile({...s0,_type:kind});
         const p=tileCenterToScreen(q[0],q[1]), sx=p[0], sy=p[1];
@@ -2176,7 +2222,7 @@ function drawAnnotations(){
   }
 
   // 성채: runtime 목록 + 단독 raw11 보강 좌표를 확대 시 표시.
-  if(scale>1.85){
+  if(scale>1.85&&markerVisibility.fortress){
     for(const s0 of fortressStructures){
       const q=structureWorldTile(s0);
       const p=tileCenterToScreen(q[0],q[1]), sx=p[0], sy=p[1];
@@ -2189,6 +2235,36 @@ function drawAnnotations(){
         });
       }
     }
+  }
+
+  // Strategic zoom: state names take precedence over all other map annotations.
+  // Keep the original state centroids and avoid modifying marker pick areas or drag handlers.
+  if(lod.strategy>.23){
+    const smallScreen=Math.min(w,h)<570;
+    const fs=Math.round(mixLod(smallScreen?16:19,smallScreen?23:34,lod.strategy));
+    const font=`900 ${fs}px "Noto Sans KR",sans-serif`;
+    ctx.save();ctx.font=font;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.lineJoin='round';
+    const faded=Math.min(1,Math.max(0,(lod.strategy-.23)/.3));
+    for(const state of D.states){
+      const center=stateCenters[state];
+      const [originX,originY]=worldToScreen(center[0],center[1]);
+      if(originX < -70 || originY < -55 || originX > w+70 || originY > h+55)continue;
+      const tw=ctx.measureText(state).width;
+      const bw=tw+Math.max(20,fs*.86), bh=fs+Math.max(13,fs*.58);
+      const sx=Math.max(bw/2+4,Math.min(w-bw/2-4,originX));
+      const sy=Math.max(bh/2+4,Math.min(h-bh/2-4,originY));
+      ctx.globalAlpha=.66+.34*faded;
+      ctx.beginPath();
+      if(ctx.roundRect)ctx.roundRect(sx-bw/2,sy-bh/2,bw,bh,Math.min(11,bh*.33));
+      else ctx.rect(sx-bw/2,sy-bh/2,bw,bh);
+      ctx.fillStyle='rgba(7,18,25,.90)';ctx.fill();
+      ctx.lineWidth=1.6;ctx.strokeStyle='rgba(249,219,150,.92)';ctx.stroke();
+      ctx.lineWidth=Math.max(4.2,fs*.19);ctx.strokeStyle='rgba(3,12,18,.98)';
+      ctx.strokeText(state,sx,sy+0.3);
+      ctx.fillStyle='#fff5d2';ctx.fillText(state,sx,sy+0.3);
+    }
+    ctx.restore();
   }
 
   // The selected city/gate label renders last, above every ordinary badge.
@@ -2727,6 +2803,7 @@ function updateInfo(regionCode, tile, structure){
       html += `<div class="k">지역</div><div class="v">${r.s} · ${r.m} · ${r.n}</div>`;
     }
     html += `</div>`;
+    if(structure?._type==='gate')html+=gateDurabilityMarkup(structure);
     html += '</div>'; box.innerHTML=html; return;
   }
 
@@ -2739,7 +2816,7 @@ function updateInfo(regionCode, tile, structure){
   }
   if(structure){
     const sg=structureGameCoord(structure);
-    html += `<div class="city"><div><b>${structure.level?`${structure.level} `:''}${structure.name}</b></div><div class="kv"><div class="k">좌표</div><div class="v">(${sg[0]}, ${sg[1]}) <button class=\"copyCoordBtn\" data-copy-coord=\"${sg[0]}.${sg[1]}\">복사</button></div></div></div>`;
+    html += `<div class="city"><div><b>${structure.level?`${structure.level} `:''}${structure.name}</b></div><div class="kv"><div class="k">좌표</div><div class="v">(${sg[0]}, ${sg[1]}) <button class=\"copyCoordBtn\" data-copy-coord=\"${sg[0]}.${sg[1]}\">복사</button></div></div>${structure._type==='gate'?gateDurabilityMarkup(structure):''}</div>`;
   }
   html += '</div>'; box.innerHTML=html;
 }
@@ -2790,7 +2867,7 @@ document.getElementById('info')?.addEventListener('click',e=>{
   else if(e.target.closest('[data-city-stats-cancel]'))host.outerHTML=cityStatsMarkup(city);
   else if(e.target.closest('[data-city-stats-reset]')){
     delete manualCityStats[String(city.id)];
-    try{localStorage.setItem(CITY_STATS_KEY,JSON.stringify(manualCityStats));}catch(_){}
+    try{localStorage.setItem(CITY_STATS_KEY,JSON.stringify(manualCityStats));saveFacilityDurability('city',city,null);}catch(_){}
     host.outerHTML=cityStatsMarkup(city);
   }
 });
@@ -2807,17 +2884,43 @@ document.getElementById('info')?.addEventListener('submit',e=>{
   const fields=['residents','capacity','score'];
   const invalid=fields.some(k=>{const raw=String(form.elements.namedItem(k)?.value||'').trim();return raw!==''&&cityStatsValue(raw)===null;});
   const data={residents:parse('residents'),capacity:parse('capacity'),score:parse('score')};
+  const durabilityRaw=String(form.elements.namedItem('durability')?.value||'').trim();
+  const durability=durabilityRaw===''?null:durabilityValue(durabilityRaw);
   const err=form.querySelector('.cityStatsError');
-  if(invalid||(data.residents!==null&&data.capacity!==null&&data.residents>data.capacity)){
-    err.textContent=invalid?'0~1,000,000 사이의 정수를 입력해 주세요.':'현재 주민 수가 주민 상한보다 클 수 없습니다.';
+  if(invalid||(durabilityRaw!==''&&durability===null)||(data.residents!==null&&data.capacity!==null&&data.residents>data.capacity)){
+    err.textContent=invalid?'0~1,000,000 사이의 정수를 입력해 주세요.':(durabilityRaw!==''&&durability===null)?'내구도는 0~1,000,000,000 사이의 정수여야 합니다.':'현재 주민 수가 주민 상한보다 클 수 없습니다.';
     err.hidden=false;return;
   }
-  manualCityStats[String(city.id)]=data;
-  try{localStorage.setItem(CITY_STATS_KEY,JSON.stringify(manualCityStats));}catch(_){
+  try{localStorage.setItem(CITY_STATS_KEY,JSON.stringify({...manualCityStats,[String(city.id)]:data}));saveFacilityDurability('city',city,durability);manualCityStats[String(city.id)]=data;}catch(_){
     err.textContent='브라우저에 저장할 수 없습니다. 저장공간/개인정보 설정을 확인해 주세요.';err.hidden=false;return;
   }
   host.outerHTML=cityStatsMarkup(city);
   if(scorePanelOpen)renderScorePanel();
+});
+document.getElementById('info')?.addEventListener('click',e=>{
+  const host=e.target.closest?.('.gateDurability[data-gate-id]');
+  if(!host)return;
+  const gate=GATE_BY_ID.get(host.dataset.gateId);
+  if(!gate)return;
+  if(e.target.closest('[data-gate-durability-edit]'))host.innerHTML=gateDurabilityForm(gate);
+  else if(e.target.closest('[data-gate-durability-cancel]'))host.outerHTML=gateDurabilityMarkup(gate);
+  else if(e.target.closest('[data-gate-durability-reset]')){
+    try{saveFacilityDurability('gate',gate,null);host.outerHTML=gateDurabilityMarkup(gate);}
+    catch(_){const err=host.querySelector('.cityStatsError');if(err){err.textContent='저장할 수 없습니다. 브라우저 설정을 확인해 주세요.';err.hidden=false;}}
+  }
+});
+document.getElementById('info')?.addEventListener('submit',e=>{
+  const form=e.target.closest?.('[data-gate-durability-form]');
+  if(!form)return;
+  e.preventDefault();
+  const host=form.closest('.gateDurability[data-gate-id]');
+  const gate=GATE_BY_ID.get(host?.dataset.gateId);
+  if(!gate)return;
+  const raw=String(form.elements.namedItem('durability')?.value||'').trim();
+  const amount=durabilityValue(raw);
+  if(raw===''||amount===null){const err=form.querySelector('.cityStatsError');err.textContent='내구도는 0~1,000,000,000 사이의 정수여야 합니다.';err.hidden=false;return;}
+  try{saveFacilityDurability('gate',gate,amount);host.outerHTML=gateDurabilityMarkup(gate);}
+  catch(_){const err=form.querySelector('.cityStatsError');err.textContent='저장할 수 없습니다. 브라우저 설정을 확인해 주세요.';err.hidden=false;}
 });
 document.getElementById('info')?.addEventListener('click',async e=>{
   const b=e.target.closest?.('[data-copy-coord]');
@@ -3598,11 +3701,58 @@ console.log('[S3 map] 성지 원본좌표 연결:',Object.values(R).filter(r=>r.
 buildTerritoryBoundarySegments();
 console.log('[S3 map] region boundaries=',regionBoundaryCount,'state boundaries=',stateBoundaryCount);
 loadTileCounterMarks();
+// User-facing legend is a small popover by the "선택 위치" button.
+const markerLegendBtn=document.getElementById('markerLegendToggleBtn');
+const markerLegendPanel=document.getElementById('markerLegendPanel');
+function positionMarkerLegendPanel(){
+  if(!markerLegendPanel||markerLegendPanel.hidden||!markerLegendBtn)return;
+  const r=markerLegendBtn.getBoundingClientRect();
+  const panelWidth=markerLegendPanel.getBoundingClientRect().width||254;
+  const left=Math.min(Math.max(8,r.left),Math.max(8,window.innerWidth-panelWidth-8));
+  const top=Math.min(r.bottom+7,Math.max(8,window.innerHeight-80));
+  markerLegendPanel.style.left=left+'px';markerLegendPanel.style.top=top+'px';
+  markerLegendPanel.style.maxHeight=Math.max(70,window.innerHeight-top-8)+'px';
+}
+function setMarkerLegendOpen(open){
+  if(!markerLegendPanel||!markerLegendBtn)return;
+  markerLegendPanel.hidden=!open;
+  markerLegendBtn.setAttribute('aria-expanded',String(open));
+  markerLegendBtn.classList.toggle('active',open);
+  if(open)positionMarkerLegendPanel();
+}
+markerLegendBtn?.addEventListener('click',()=>setMarkerLegendOpen(markerLegendPanel.hidden));
+document.getElementById('markerLegendCloseBtn')?.addEventListener('click',()=>setMarkerLegendOpen(false));
+markerLegendPanel?.addEventListener('change',event=>{
+  const input=event.target.closest('input[data-marker-visibility]');
+  if(!input||!Object.prototype.hasOwnProperty.call(markerVisibility,input.dataset.markerVisibility))return;
+  const kind=input.dataset.markerVisibility;
+  markerVisibility[kind]=input.checked;
+  try{localStorage.setItem(MARKER_LEGEND_PREF_KEY,JSON.stringify(markerVisibility));}catch(_){}
+  if(kind==='prevRange'){
+    // Range lines live in the base bitmap; other markers are annotations only.
+    invalidateBaseCache();
+    if(zoomPreviewActive)commitPreview();else scheduleFullDraw();
+  }else scheduleFullDraw();
+});
+for(const input of markerLegendPanel?.querySelectorAll('input[data-marker-visibility]')||[]){
+  input.checked=markerVisibility[input.dataset.markerVisibility];
+}
+document.addEventListener('pointerdown',event=>{
+  if(markerLegendPanel&&!markerLegendPanel.hidden&&!markerLegendPanel.contains(event.target)&&!markerLegendBtn?.contains(event.target))setMarkerLegendOpen(false);
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&markerLegendPanel&&!markerLegendPanel.hidden){
+    setMarkerLegendOpen(false);markerLegendBtn?.focus();
+  }
+});
+window.addEventListener('resize',positionMarkerLegendPanel,{passive:true});
+window.addEventListener('scroll',positionMarkerLegendPanel,{passive:true,capture:true});
+
 document.getElementById('connectionToggleBtn')?.addEventListener('click',e=>{
   showS11Connections=!showS11Connections;
   e.currentTarget.classList.toggle('active',showS11Connections);
   e.currentTarget.setAttribute('aria-pressed',String(showS11Connections));
-  e.currentTarget.textContent='보급로';
+  e.currentTarget.textContent='보급 연결';
   scheduleFullDraw();
 });
 resize(); updateInfo(null,null,null); renderScorePanel(); loadExactTileLayers();
