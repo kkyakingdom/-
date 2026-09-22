@@ -14,7 +14,7 @@
     <p id="accessLoading" class="access-loading" role="status" hidden>지도를 불러오는 중...</p>
   </form>
 </section>
-<div id="app"><div id="mapwrap"><canvas id="map"></canvas><canvas id="fx"></canvas>
+<div id="app"><div id="mapwrap"><canvas id="map"></canvas><canvas id="scoreShade" aria-hidden="true"></canvas><canvas id="fx"></canvas>
 <header id="topbar">
  <div class="top-actions"><div class="searchWrap"><input id="search" aria-label="성지와 지역 검색" placeholder="성지 · 지역 · 군 검색  /" autocomplete="off"><div id="results" class="searchResults" aria-live="polite"></div></div>
  <button class="btn iconBtn" id="zoomOutBtn" title="축소" aria-label="축소">−</button><button class="btn iconBtn" id="zoomInBtn" title="확대" aria-label="확대">＋</button>
@@ -64,7 +64,7 @@
   <div class="scoreAllSummary" id="scoreAllSummary" aria-live="polite"></div>
   <div class="scoreCurrentHead"><b id="scoreActiveTitle">연맹 1 점령 성지</b><button type="button" id="scoreClearAllianceBtn">이 연맹 초기화</button></div>
   <div id="scoreCityList" class="scoreCityList" aria-live="polite"></div>
-  <div class="scorePanelFoot"><button type="button" id="scoreClearAllBtn">전체 초기화</button></div>
+  <div class="scorePanelFoot"><button type="button" id="scoreClearAllBtn">전체 초기화</button><label class="scoreShadeSwitch" for="scoreAreaShadeToggle"><span>경계 음영</span><input type="checkbox" id="scoreAreaShadeToggle" checked role="switch" aria-label="선택 성지 경계 음영 표시"/><span class="scoreShadeKnob" aria-hidden="true"></span><b class="scoreShadeState" aria-hidden="true"></b></label></div>
  </div>
 </aside>
 <aside id="landExportPanel" class="landExportPanel" aria-labelledby="landExportPanelTitle" hidden>

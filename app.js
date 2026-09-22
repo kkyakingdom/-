@@ -20,11 +20,29 @@ let showS11Connections=false, selectedS11ConnectionId=0;
 const CITY_STATS_KEY='s11_city_stats_manual_v1';
 const CITY_STATS_REFERENCE=window.S3MAP_CITY_STATS||{};
 const CITY_BY_ID=new Map(Object.values(R).filter(r=>r.city).map(r=>[String(r.city.id),r.city]));
+// Locate the exact region code for each score city. Do not approximate city borders with squares.
+const SCORE_REGION_BY_CITY=new Map(Object.entries(R).filter(([,r])=>r.city).map(([code,r])=>[String(r.city.id),{code,region:r}]));
 // 패업 점수 계산기: 지도에 실제 존재하는 217개 성지만 지정할 수 있다.
 // 하나의 성지는 하나의 연맹에만 배정되며 사용자가 직접 선택한 상태를 브라우저에 저장한다.
 const SCORE_STORAGE_KEY='s11_alliance_city_occupation_v1';
 const SCORE_ALLIANCE_COLORS={1:'#ffda73',2:'#80d9ff',3:'#b9f49f'};
 let scorePanelOpen=false, scoreActiveAlliance=1;
+const SCORE_SHADE_PREF_KEY='s11_score_city_boundary_shading_v1';
+let scoreAreaShadingEnabled=true;
+try{scoreAreaShadingEnabled=localStorage.getItem(SCORE_SHADE_PREF_KEY)!=='off';}catch(_){/* nonpersistent fallback */}
+let scoreShadeRevision=0,scoreShadeCache=null;
+const scoreRegionFillPaths=new Map();
+function invalidateScoreShade(){
+  scoreShadeRevision++;
+  if(scoreShadeCache){scoreShadeCache.canvas.width=0;scoreShadeCache.canvas.height=0;scoreShadeCache=null;}
+}
+function setScoreAreaShading(enabled){
+  scoreAreaShadingEnabled=!!enabled;
+  try{localStorage.setItem(SCORE_SHADE_PREF_KEY,scoreAreaShadingEnabled?'on':'off');}catch(_){}
+  const control=document.getElementById('scoreAreaShadeToggle');
+  if(control)control.checked=scoreAreaShadingEnabled;
+  invalidateScoreShade();drawScoreAreaShading();
+}
 const scoreOwners=new Map(); // city ID -> alliance 1, 2, 3
 try{
   const saved=JSON.parse(localStorage.getItem(SCORE_STORAGE_KEY)||'{}');
@@ -35,8 +53,10 @@ try{
   }
 }catch(_){/* 저장 데이터 손상 시 빈 상태에서 시작 */}
 function persistScoreOwners(){
+  invalidateScoreShade();
   try{localStorage.setItem(SCORE_STORAGE_KEY,JSON.stringify(Object.fromEntries(scoreOwners)));}
   catch(_){setScoreInstruction('브라우저에 저장할 수 없습니다. 현재 화면에서는 선택이 유지됩니다.');}
+  drawScoreAreaShading();
 }
 function scoreForCity(city){
   const manual=manualCityStats[String(city.id)];
@@ -62,6 +82,8 @@ function renderScorePanel(){
   const toggle=document.getElementById('scoreToggleBtn');
   toggle?.classList.toggle('active',scorePanelOpen);toggle?.setAttribute('aria-pressed',String(scorePanelOpen));
   if(!scorePanelOpen)return;
+  const shadeToggle=document.getElementById('scoreAreaShadeToggle');
+  if(shadeToggle)shadeToggle.checked=scoreAreaShadingEnabled;
   const totals=scoreTotals();
   for(const button of panel.querySelectorAll('[data-score-alliance]')){
     const alliance=Number(button.dataset.scoreAlliance);
@@ -101,6 +123,69 @@ function assignScoreCity(city){
     setScoreInstruction(previous?`${city.name} · 연맹 ${previous} → 연맹 ${scoreActiveAlliance}로 변경`:`${city.name} · 연맹 ${scoreActiveAlliance}에 추가`);
   }
   persistScoreOwners();renderScorePanel();drawSelection();
+}
+// A city is a union of the exact staggered tiles tagged with its region code.
+// Build just the regions the user selects, and merge vertical runs into rectangles.
+// This avoids painting other cities' tiles and avoids scanning the full grid per frame.
+function scoreRegionFillPath(id){
+  if(scoreRegionFillPaths.has(id))return scoreRegionFillPaths.get(id);
+  const record=SCORE_REGION_BY_CITY.get(id);
+  if(!record)return null;
+  const b=record.region.b||[0,0,W,H],code=Number.parseInt(record.code,16);
+  const x0=Math.max(0,Math.floor(Math.min(b[0],b[2]))-2),x1=Math.min(W-1,Math.ceil(Math.max(b[0],b[2]))+1);
+  const y0=Math.max(0,Math.floor(Math.min(b[1],b[3]))-2),y1=Math.min(H-1,Math.ceil(Math.max(b[1],b[3]))+1);
+  const path=new Path2D();
+  for(let x=x0;x<=x1;x++){
+    let run=-1;
+    for(let y=y0;y<=y1+1;y++){
+      const match=y<=y1&&codes[y*W+x]===code;
+      if(match&&run<0)run=y;
+      else if(!match&&run>=0){path.rect(x,run+oddXHalfShift(x),1,y-run);run=-1;}
+    }
+  }
+  scoreRegionFillPaths.set(id,path);
+  return path;
+}
+function scoreShadeCacheKey(){
+  return [scoreShadeRevision,map.width,map.height,renderDpr,scale].join('|');
+}
+function drawScoreAreaShading(){
+  if(!scoreShadeCanvas)return;
+  const w=map.clientWidth,h=map.clientHeight;
+  scoreShadeCtx.setTransform(1,0,0,1,0,0);
+  scoreShadeCtx.clearRect(0,0,scoreShadeCanvas.width,scoreShadeCanvas.height);
+  if(!scoreAreaShadingEnabled||!scoreOwners.size)return;
+  const key=scoreShadeCacheKey();
+  let entry=scoreShadeCache;
+  let sx=entry?(entry.margin+entry.ox-ox):0,sy=entry?(entry.margin+entry.oy-oy):0;
+  if(!entry||entry.key!==key||sx<0||sy<0||sx+w>entry.cssWidth||sy+h>entry.cssHeight){
+    const margin=baseMargin();
+    const canvas=document.createElement('canvas');
+    canvas.width=map.width+2*Math.ceil(margin*renderDpr);
+    canvas.height=map.height+2*Math.ceil(margin*renderDpr);
+    const g=canvas.getContext('2d');
+    const originalOx=ox,originalOy=oy;
+    const view=activeWorldView;
+    try{
+      activeWorldView=viewportWorldBounds(8,margin);
+      ox+=margin;oy+=margin;
+      g.setTransform(renderDpr,0,0,renderDpr,0,0);
+      g.translate(ox,oy);g.translate(CX*scale,CY*scale);g.rotate(ROT);
+      g.scale(FLIP_X*scale,scale);g.translate(-CX,-CY);
+      g.globalAlpha=.15; // subtle shading: original resource colors and city labels stay legible.
+      for(const [id,alliance] of scoreOwners){
+        const record=SCORE_REGION_BY_CITY.get(id);
+        if(!record||!intersectsWorldView({minX:record.region.b[0],minY:record.region.b[1],maxX:record.region.b[2],maxY:record.region.b[3]}))continue;
+        const path=scoreRegionFillPath(id);
+        if(path){g.fillStyle=SCORE_ALLIANCE_COLORS[alliance];g.fill(path);}
+      }
+    }finally{ox=originalOx;oy=originalOy;activeWorldView=view;}
+    if(scoreShadeCache){scoreShadeCache.canvas.width=0;scoreShadeCache.canvas.height=0;}
+    entry={key,canvas,margin,ox,oy,cssWidth:canvas.width/renderDpr,cssHeight:canvas.height/renderDpr};
+    scoreShadeCache=entry;sx=margin;sy=margin;
+  }
+  scoreShadeCtx.setTransform(renderDpr,0,0,renderDpr,0,0);
+  scoreShadeCtx.drawImage(entry.canvas,Math.round(sx*renderDpr),Math.round(sy*renderDpr),map.width,map.height,0,0,w,h);
 }
 function drawScoreCityMarkers(g){
   if(!scorePanelOpen&&!scoreOwners.size)return;
@@ -247,9 +332,67 @@ const regionsWithCity=regionEntries.filter(([,r])=>r.city && r.city.x!=null && r
 const regionsWithoutCity=regionEntries.filter(([,r])=>!(r.city && r.city.x!=null && r.city.y!=null));
 const map=document.getElementById('map'), ctx=map.getContext('2d');
 const fx=document.getElementById('fx'), fctx=fx.getContext('2d');
-const cachedBaseCanvas=document.createElement('canvas'),cachedBaseCtx=cachedBaseCanvas.getContext('2d');
+const scoreShadeCanvas=document.getElementById('scoreShade'),scoreShadeCtx=scoreShadeCanvas.getContext('2d');
+// Overscanned LRU base buffers: reuse *exact* terrain, resource colors and boundaries
+// while panning. Only the small uncovered margin needs a new render.
 let cachedBaseKey='',cachedBaseRevision=0;
-function invalidateBaseCache(){cachedBaseRevision++;cachedBaseKey='';}
+const baseCacheEntries=[];
+const mapPerf={draws:0,baseCacheHits:0,baseCacheMisses:0,previewFrames:0,lastDrawMs:0,maxDrawMs:0};
+Object.defineProperty(window,'__S11MapPerf',{value:mapPerf,configurable:false});
+function invalidateBaseCache(){
+  cachedBaseRevision++;cachedBaseKey='';
+  for(const entry of baseCacheEntries){entry.canvas.width=0;entry.canvas.height=0;}
+  baseCacheEntries.length=0;
+}
+function baseMargin(){return Math.max(96,Math.min(300,Math.round(Math.min(map.clientWidth,map.clientHeight)*0.32)));}
+function baseCacheConfigKey(){return [cachedBaseRevision,map.width,map.height,renderDpr,scale,showTerrain,exactTerrainReady,borderMode].join('|');}
+function findBaseCache(allowEdge=false){
+  const key=baseCacheConfigKey();
+  for(let i=baseCacheEntries.length-1;i>=0;i--){
+    const entry=baseCacheEntries[i];
+    if(entry.key!==key)continue;
+    const sx=entry.margin+entry.ox-ox,sy=entry.margin+entry.oy-oy;
+    const slack=allowEdge?0:2;
+    if(sx < slack||sy < slack||sx+map.clientWidth>entry.cssWidth-slack||sy+map.clientHeight>entry.cssHeight-slack)continue;
+    // Move a recently used scale / region to the end of the LRU.
+    if(i!==baseCacheEntries.length-1){baseCacheEntries.splice(i,1);baseCacheEntries.push(entry);}
+    return entry;
+  }
+  return null;
+}
+function paintCachedBase(g,entry){
+  const sx=Math.round((entry.margin+entry.ox-ox)*renderDpr),sy=Math.round((entry.margin+entry.oy-oy)*renderDpr);
+  g.drawImage(entry.canvas,sx,sy,map.width,map.height,0,0,map.clientWidth,map.clientHeight);
+}
+function buildBaseCache(){
+  const w=map.clientWidth,h=map.clientHeight,margin=baseMargin();
+  const canvas=document.createElement('canvas');
+  canvas.width=map.width+2*Math.ceil(margin*renderDpr);
+  canvas.height=map.height+2*Math.ceil(margin*renderDpr);
+  const g=canvas.getContext('2d',{alpha:false});
+  const entry={canvas,key:baseCacheConfigKey(),margin,ox,oy,cssWidth:canvas.width/renderDpr,cssHeight:canvas.height/renderDpr};
+  const beforeView=activeWorldView,beforeOx=ox,beforeOy=oy;
+  try{
+    // Culling must include the additional border before shifting the render origin.
+    activeWorldView=viewportWorldBounds(8,margin);
+    ox+=margin;oy+=margin;
+    const bw=entry.cssWidth,bh=entry.cssHeight;
+    g.setTransform(renderDpr,0,0,renderDpr,0,0);
+    g.fillStyle='#0e0a06';g.fillRect(0,0,bw,bh);
+    drawWorldLayer(g,off);
+    if(showTerrain&&exactTerrainReady)drawOffsetTileTerrain(g,true);
+    g.fillStyle='rgba(0,0,0,.13)';g.fillRect(0,0,bw,bh);
+    drawTerritoryRanges(g);
+    drawHolySitePrevRanges(g);
+    drawSpecialTerrainOutline(g);
+  }finally{
+    ox=beforeOx;oy=beforeOy;activeWorldView=beforeView;
+  }
+  baseCacheEntries.push(entry);
+  // Two bounded buffers retain frequently revisited scale/position without leaks.
+  while(baseCacheEntries.length>2){const old=baseCacheEntries.shift();old.canvas.width=0;old.canvas.height=0;}
+  return entry;
+}
 
 // 성능 우선: 화면이 매우 큰 경우 내부 캔버스 해상도를 자동으로 조금 낮춰 드래그/확대 시 렉을 줄인다.
 function computeRenderDpr(){
@@ -1510,7 +1653,7 @@ function paintOverlayPixel(i,p,ps,pn,pref){
   let r,g,b,aLow,aHi;
   if(t===14){r=20;g=222;b=227;aLow=202;aHi=251;} // 공성 부지 중심: 주변 raw 15와 시각적으로 분리
   else if(t===2){r=46;g=84;b=154;aLow=174;aHi=200;} // 참조 팔레트: 하천은 차분한 깊은 청색
-  else if(t===3){r=70;g=81;b=65;aLow=214;aHi=234;} // 참조 팔레트: 산맥은 잿빛 올리브색
+  else if(t===3){r=38;g=40;b=47;aLow=250;aHi=255;} // 산: 한 단계 더 짙은 암석회색. 1~8레벨 자원 색상은 유지하며 저·고배율 모두 동일하게 적용
   else if(t===7){r=101;g=70;b=48;aLow=228;aHi=246;} // 실제 특수지형(raw 7): 따뜻한 짙은 갈색, 낮은 내부 무늬 대비
   else if(t===0&&rr===0){r=73;g=105;b=71;aLow=190;aHi=221;} // 자원 없는 공터만 자연스러운 저채도 녹색. 자원 픽셀 로직은 그대로.
   else if(t===0&&palette&&group>=0&&!showResource){r=210;g=197;b=139;aLow=22;aHi=61;}
@@ -1614,9 +1757,9 @@ function colorForRegion(r){ return hexRgb(stateColors[r.s]||'#8899aa'); }
 function worldToScreen(x,y){ const dx=(x-CX)*scale*FLIP_X, dy=(y-CY)*scale; return [ox + CX*scale + dx*COS - dy*SIN, oy + CY*scale + dx*SIN + dy*COS]; }
 function screenToWorld(sx,sy){ const vx=sx - (ox + CX*scale), vy=sy - (oy + CY*scale); const rx= vx*COS + vy*SIN, ry=-vx*SIN + vy*COS; return [(rx/(scale*FLIP_X)) + CX, (ry/scale) + CY]; }
 let activeWorldView=null;
-function viewportWorldBounds(padding=8){
+function viewportWorldBounds(padding=8,extra=0){
   const w=map.clientWidth,h=map.clientHeight;
-  const corners=[screenToWorld(0,0),screenToWorld(w,0),screenToWorld(w,h),screenToWorld(0,h)];
+  const corners=[screenToWorld(-extra,-extra),screenToWorld(w+extra,-extra),screenToWorld(w+extra,h+extra),screenToWorld(-extra,h+extra)];
   const pad=padding/Math.max(scale,.001)+3;
   return {minX:Math.max(-2,Math.min(...corners.map(p=>p[0]))-pad),maxX:Math.min(W+2,Math.max(...corners.map(p=>p[0]))+pad),
     minY:Math.max(-2,Math.min(...corners.map(p=>p[1]))-pad),maxY:Math.min(H+2,Math.max(...corners.map(p=>p[1]))+pad)};
@@ -2057,24 +2200,28 @@ function drawAnnotations(){
   ctx.restore();
 }
 function buildBase(){
+  // 안 B: 11개 권역 모두 동일한 저채도 회청색을 아주 연하게 적용한다.
+  // 권역별 개별 색상은 사용하지 않고 경계·권역명·성지·자원·보급로 표현은 유지한다.
   const img=octx.createImageData(W,H), a=img.data;
+  const neutralBase=[181,194,194]; // 동일한 저채도 회청색
+  const overlayAlpha=38;          // 안 A(28)보다 약간 선명하되 배경으로만 표시
   for(let i=0;i<codes.length;i++){
     const c=codeHex(codes[i]), r=R[c];
-    let rgb=[100,100,100];
-    if(r) rgb=colorForRegion(r);
+    let rgb=neutralBase;
+    if(!r) rgb=[168,160,148];
 
     const x=i%W, y=(i/W)|0;
     let shade=1;
     if(shadeMode){
-      shade=0.92 + 0.08*Math.sin(x*0.020+y*0.009) + 0.06*Math.cos(y*0.028) + 0.04*Math.sin((x+y)*0.013);
-      shade=Math.max(0.82,Math.min(1.15,shade));
+      shade=0.985 + 0.015*Math.sin(x*0.020+y*0.009) + 0.010*Math.cos(y*0.028) + 0.008*Math.sin((x+y)*0.013);
+      shade=Math.max(0.96,Math.min(1.04,shade));
     }
 
     const j=i*4;
     a[j]=Math.max(0,Math.min(255,rgb[0]*shade));
     a[j+1]=Math.max(0,Math.min(255,rgb[1]*shade));
     a[j+2]=Math.max(0,Math.min(255,rgb[2]*shade));
-    a[j+3]=170;
+    a[j+3]=overlayAlpha;
   }
 
   octx.clearRect(0,0,W,H);
@@ -2088,7 +2235,7 @@ function resize(){
   const r=map.parentElement.getBoundingClientRect();
   renderDpr=computeRenderDpr();
   const pw=Math.floor(r.width*renderDpr), ph=Math.floor(r.height*renderDpr);
-  for(const c of [map,fx]){
+  for(const c of [map,fx,scoreShadeCanvas]){
     if(c.width!==pw || c.height!==ph){ c.width=pw; c.height=ph; }
     c.style.width=r.width+'px';
     c.style.height=r.height+'px';
@@ -2454,31 +2601,18 @@ window.addEventListener('s11-steel-redraw',()=>drawSelection());
 function drawMini(){}
 
 function draw(){
+  const started=performance.now();mapPerf.draws++;
   activeWorldView=viewportWorldBounds();
-  const w=map.clientWidth, h=map.clientHeight;
+  const w=map.clientWidth,h=map.clientHeight;
   for(const c of [ctx,fctx]){
     c.setTransform(renderDpr,0,0,renderDpr,0,0);
     c.clearRect(0,0,w,h);
   }
-  // 원본 지형/자원 색과 경계가 그대로인 경우에는 이전 화면 합성 결과를 재사용한다.
-  // 화면을 벗어난 원본 좌표는 기존 drawWorldLayerOffset의 클리핑 규칙 그대로 처리한다.
-  const baseKey=[cachedBaseRevision,map.width,map.height,renderDpr,scale,ox,oy,
-    showTerrain,exactTerrainReady,borderMode].join('|');
-  if(cachedBaseKey!==baseKey){
-    if(cachedBaseCanvas.width!==map.width)cachedBaseCanvas.width=map.width;
-    if(cachedBaseCanvas.height!==map.height)cachedBaseCanvas.height=map.height;
-    cachedBaseCtx.setTransform(renderDpr,0,0,renderDpr,0,0);
-    cachedBaseCtx.clearRect(0,0,w,h);
-    cachedBaseCtx.fillStyle='#0e0a06';cachedBaseCtx.fillRect(0,0,w,h);
-    drawWorldLayer(cachedBaseCtx,off);
-    if(showTerrain&&exactTerrainReady)drawOffsetTileTerrain(cachedBaseCtx,true);
-    cachedBaseCtx.fillStyle='rgba(0,0,0,.13)';cachedBaseCtx.fillRect(0,0,w,h);
-    drawTerritoryRanges(cachedBaseCtx);
-    drawHolySitePrevRanges(cachedBaseCtx);
-    drawSpecialTerrainOutline(cachedBaseCtx);
-    cachedBaseKey=baseKey;
-  }
-  ctx.drawImage(cachedBaseCanvas,0,0,w,h);
+  let entry=findBaseCache();
+  if(entry)mapPerf.baseCacheHits++;
+  else{mapPerf.baseCacheMisses++;entry=buildBaseCache();}
+  paintCachedBase(ctx,entry);
+  cachedBaseKey=entry.key+'|'+entry.ox+'|'+entry.oy;
   drawS11ConnectionNetwork(ctx);
   drawGyeokmunOccupationLinks(ctx);
   drawAnnotations();
@@ -2486,7 +2620,10 @@ function draw(){
   drawTileGridStatic(ctx);
   drawSiegeCenters(ctx);
   drawTileCounters(ctx);
+  drawScoreAreaShading();
   drawSelection();
+  const elapsed=performance.now()-started;
+  mapPerf.lastDrawMs=elapsed;mapPerf.maxDrawMs=Math.max(mapPerf.maxDrawMs,elapsed);
 }
 function centerOn(x,y,newScale){ if(newScale) scale=newScale; const w=map.clientWidth, h=map.clientHeight; const dx=(x-CX)*scale*FLIP_X, dy=(y-CY)*scale; ox = w/2 - (CX*scale + dx*COS - dy*SIN); oy = h/2 - (CY*scale + dx*SIN + dy*COS); draw(); }
 
@@ -2588,6 +2725,7 @@ document.getElementById('landExportPanel')?.addEventListener('click',e=>{
 });
 document.getElementById('scoreToggleBtn')?.addEventListener('click',()=>setScorePanelOpen(!scorePanelOpen));
 document.getElementById('scoreCloseBtn')?.addEventListener('click',()=>setScorePanelOpen(false));
+document.getElementById('scoreAreaShadeToggle')?.addEventListener('change',e=>setScoreAreaShading(e.target.checked));
 document.getElementById('scorePanel')?.addEventListener('click',e=>{
   const allianceBtn=e.target.closest?.('[data-score-alliance]');
   if(allianceBtn){
@@ -3024,12 +3162,13 @@ for(const b of document.querySelectorAll('[data-resource-preset]')) b.addEventLi
 updateResourceLegend();
 
 let fullDrawRAF=0, selectionRAF=0, previewRAF=0;
-const previewMap=document.createElement('canvas'), previewFx=document.createElement('canvas');
-const previewMapCtx=previewMap.getContext('2d'), previewFxCtx=previewFx.getContext('2d');
+const previewMap=document.createElement('canvas'), previewFx=document.createElement('canvas'), previewScoreShade=document.createElement('canvas');
+const previewMapCtx=previewMap.getContext('2d'), previewFxCtx=previewFx.getContext('2d'), previewScoreShadeCtx=previewScoreShade.getContext('2d');
 let previewBaseScale=scale, previewBaseOx=ox, previewBaseOy=oy;
 let dragStartX=0, dragStartY=0, dragBaseOx=0, dragBaseOy=0;
-let dragPreviewCaptured=false;
+let dragPreviewCaptured=false,pendingDragRefresh=false;
 let zoomPreviewActive=false, zoomCommitTimer=0;
+let pendingWheelRAF=0,pendingWheelDelta=0,pendingWheelX=0,pendingWheelY=0;
 let pendingHoverClientX=0, pendingHoverClientY=0;
 let lastHoverSignature='';
 let lastInfoTileKey='';
@@ -3037,8 +3176,10 @@ let lastHudText='';
 function capturePreview(){
   previewMap.width=map.width; previewMap.height=map.height;
   previewFx.width=fx.width; previewFx.height=fx.height;
+  previewScoreShade.width=scoreShadeCanvas.width;previewScoreShade.height=scoreShadeCanvas.height;
   previewMapCtx.setTransform(1,0,0,1,0,0); previewMapCtx.clearRect(0,0,previewMap.width,previewMap.height); previewMapCtx.drawImage(map,0,0);
   previewFxCtx.setTransform(1,0,0,1,0,0); previewFxCtx.clearRect(0,0,previewFx.width,previewFx.height); previewFxCtx.drawImage(fx,0,0);
+  previewScoreShadeCtx.setTransform(1,0,0,1,0,0);previewScoreShadeCtx.clearRect(0,0,previewScoreShade.width,previewScoreShade.height);previewScoreShadeCtx.drawImage(scoreShadeCanvas,0,0);
   previewBaseScale=scale; previewBaseOx=ox; previewBaseOy=oy;
 }
 function drawPreview(){
@@ -3050,9 +3191,24 @@ function drawPreview(){
   const newAx=ox + CX*scale, newAy=oy + CY*scale;
   const dx=newAx-ratio*oldAx, dy=newAy-ratio*oldAy;
   ctx.setTransform(renderDpr,0,0,renderDpr,0,0);
-  ctx.clearRect(0,0,w,h); ctx.fillStyle='#0e0a06'; ctx.fillRect(0,0,w,h);
+  ctx.clearRect(0,0,w,h);ctx.fillStyle='#0e0a06';ctx.fillRect(0,0,w,h);
+  if(scale===previewBaseScale){
+    const underlay=findBaseCache(true);
+    if(underlay)paintCachedBase(ctx,underlay);
+  }
   ctx.imageSmoothingEnabled=true;
   ctx.drawImage(previewMap,0,0,previewMap.width,previewMap.height,dx,dy,w*ratio,h*ratio);
+  mapPerf.previewFrames++;
+  scoreShadeCtx.setTransform(renderDpr,0,0,renderDpr,0,0);
+  scoreShadeCtx.clearRect(0,0,w,h);
+  if(scoreAreaShadingEnabled&&scoreOwners.size){
+    if(scale===previewBaseScale&&scoreShadeCache){
+      const entry=scoreShadeCache,sx=entry.margin+entry.ox-ox,sy=entry.margin+entry.oy-oy;
+      if(entry.key===scoreShadeCacheKey()&&sx>=0&&sy>=0&&sx+w<=entry.cssWidth&&sy+h<=entry.cssHeight){
+        scoreShadeCtx.drawImage(entry.canvas,Math.round(sx*renderDpr),Math.round(sy*renderDpr),map.width,map.height,0,0,w,h);
+      }else scoreShadeCtx.drawImage(previewScoreShade,0,0,previewScoreShade.width,previewScoreShade.height,dx,dy,w*ratio,h*ratio);
+    }else scoreShadeCtx.drawImage(previewScoreShade,0,0,previewScoreShade.width,previewScoreShade.height,dx,dy,w*ratio,h*ratio);
+  }
   fctx.setTransform(renderDpr,0,0,renderDpr,0,0);
   fctx.clearRect(0,0,w,h);
   fctx.drawImage(previewFx,0,0,previewFx.width,previewFx.height,dx,dy,w*ratio,h*ratio);
@@ -3061,8 +3217,9 @@ function schedulePreview(){ if(!previewRAF) previewRAF=requestAnimationFrame(dra
 function cancelPreviewFrame(){ if(previewRAF){ cancelAnimationFrame(previewRAF); previewRAF=0; } }
 function commitPreview(){
   cancelPreviewFrame();
+  if(pendingWheelRAF){cancelAnimationFrame(pendingWheelRAF);pendingWheelRAF=0;flushWheelZoom();}
   zoomPreviewActive=false;
-  if(zoomCommitTimer){ clearTimeout(zoomCommitTimer); zoomCommitTimer=0; }
+  if(zoomCommitTimer){clearTimeout(zoomCommitTimer);zoomCommitTimer=0;}
   draw();
 }
 function scheduleFullDraw(){
@@ -3116,12 +3273,21 @@ map.addEventListener('pointermove',e=>{
     ox=dragBaseOx+dx; oy=dragBaseOy+dy;
     lastX=e.clientX; lastY=e.clientY;
     schedulePreview();
+    // A full refresh in pointermove blocked input; schedule it after the fast preview.
+    // The base overscan makes normal pans a cheap crop instead of a redraw.
     const refreshAt=Math.max(260,Math.min(map.clientWidth,map.clientHeight)*0.32);
     if(Math.max(Math.abs(dx),Math.abs(dy))>refreshAt){
-      cancelPreviewFrame();
-      draw(); capturePreview();
-      dragStartX=e.clientX; dragStartY=e.clientY;
-      dragBaseOx=ox; dragBaseOy=oy;
+      const refreshX=e.clientX,refreshY=e.clientY;
+      if(!pendingDragRefresh){
+        pendingDragRefresh=true;
+        requestAnimationFrame(()=>{
+          pendingDragRefresh=false;
+          if(!dragging||zoomPreviewActive)return;
+          cancelPreviewFrame();draw();capturePreview();
+          dragStartX=lastX;dragStartY=lastY;
+          dragBaseOx=ox;dragBaseOy=oy;
+        });
+      }
     }
     return;
   }
@@ -3204,20 +3370,30 @@ map.addEventListener('dblclick',e=>{
   const [mx,my]=toMap(e.clientX,e.clientY);
   if(tileCounterMode && scale>6) removeTileCounterMark(Math.floor(mx),Math.floor(my));
 });
+function flushWheelZoom(){
+  pendingWheelRAF=0;
+  const delta=pendingWheelDelta;pendingWheelDelta=0;
+  if(!delta)return;
+  const px=pendingWheelX,py=pendingWheelY;
+  const world=screenToWorld(px,py);
+  const nextScale=Math.max(.12,Math.min(MAX_SCALE,scale*Math.exp(-delta*0.00145)));
+  scale=nextScale;
+  const dx=(world[0]-CX)*scale*FLIP_X,dy=(world[1]-CY)*scale;
+  ox=px-(CX*scale+dx*COS-dy*SIN);
+  oy=py-(CY*scale+dx*SIN+dy*COS);
+  // Draw the latest wheel position now; a second nested RAF adds input latency.
+  cancelPreviewFrame();drawPreview();
+  if(zoomCommitTimer)clearTimeout(zoomCommitTimer);
+  zoomCommitTimer=setTimeout(commitPreview,105);
+}
 map.addEventListener('wheel',e=>{
   e.preventDefault();
   const r=map.getBoundingClientRect();
-  const px=e.clientX-r.left, py=e.clientY-r.top;
-  if(!zoomPreviewActive){ capturePreview(); zoomPreviewActive=true; }
-  const world=screenToWorld(px,py);
-  const ns=Math.max(.12, Math.min(MAX_SCALE, scale*Math.exp(-e.deltaY*0.00145)));
-  scale=ns;
-  const dx=(world[0]-CX)*scale*FLIP_X, dy=(world[1]-CY)*scale;
-  ox = px - (CX*scale + dx*COS - dy*SIN);
-  oy = py - (CY*scale + dx*SIN + dy*COS);
-  schedulePreview();
-  if(zoomCommitTimer) clearTimeout(zoomCommitTimer);
-  zoomCommitTimer=setTimeout(commitPreview,90);
+  pendingWheelX=e.clientX-r.left;pendingWheelY=e.clientY-r.top;
+  if(!zoomPreviewActive){capturePreview();zoomPreviewActive=true;}
+  const delta=e.deltaY*(e.deltaMode===1?16:(e.deltaMode===2?map.clientHeight:1));
+  pendingWheelDelta+=delta;
+  if(!pendingWheelRAF)pendingWheelRAF=requestAnimationFrame(flushWheelZoom);
 },{passive:false});
 function runTileLayoutSelfCheck(){
   // 사용자 실측 기준: 839.837 -> 840.837 = 오른쪽 + 반칸 아래.
