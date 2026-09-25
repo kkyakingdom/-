@@ -886,3 +886,61 @@ html,body{background:#0b1215;color:var(--text)}
 .markerStateSample{border-top:4px dashed #b7edff}.markerCountySample{border-top:3px solid #ffcf7e}
 #markerLegendToggleBtn.active{border-color:#edce8e;background:#514024;color:#fff0c5}
 @media(max-width:600px){#topbar .top-actions #markerLegendToggleBtn{order:2;padding:6px 7px;font-size:11px}.markerLegendPanel{width:min(254px,calc(100vw - 16px))}}
+
+
+/* v22.9.49: MOBILE UI ONLY. Keep the original map canvas / input handlers. */
+.mobileDock,.mobileToolsToggleBtn{display:none}
+@media (max-width:900px){
+  :root{--mobile-top:calc(58px + env(safe-area-inset-top,0px));--mobile-bottom:calc(62px + env(safe-area-inset-bottom,0px));}
+  #topbar{position:fixed!important;z-index:60;top:env(safe-area-inset-top,0px)!important;left:0!important;right:0!important;display:block!important;max-height:calc(100dvh - var(--mobile-bottom) - 6px);padding:6px 6px 0;overflow:visible!important;touch-action:auto!important;pointer-events:none;}
+  #topbar .top-actions{pointer-events:auto;box-sizing:border-box;width:100%!important;max-width:100%!important;min-width:0!important;min-height:46px;display:flex!important;flex-wrap:nowrap!important;align-items:center!important;gap:5px!important;padding:4px!important;margin:0!important;overflow:visible!important;border-radius:12px!important;box-shadow:0 5px 24px rgba(0,0,0,.4)!important;}
+  #topbar .top-actions .searchWrap{order:0!important;flex:1 1 auto!important;width:auto!important;min-width:0!important;}
+  #topbar #search,#topbar .searchWrap #search{box-sizing:border-box;width:100%!important;min-width:0!important;height:40px!important;min-height:40px!important;padding:7px 9px!important;font-size:16px!important;}
+  #topbar .top-actions > .btn{margin:0!important;flex:none!important;order:5!important;box-sizing:border-box;min-height:40px!important;font-size:12px!important;touch-action:manipulation;}
+  #topbar #zoomOutBtn,#topbar #zoomInBtn{display:inline-flex!important;order:1!important;align-items:center;justify-content:center;min-width:40px!important;width:40px!important;height:40px!important;padding:0!important;font-size:22px!important;}
+  #topbar .top-actions > #mobileToolsToggleBtn{display:inline-flex!important;order:2!important;align-items:center;justify-content:center;min-width:66px!important;width:66px!important;height:40px!important;padding:0 5px!important;font-size:12px!important;white-space:nowrap;}
+  #topbar .top-actions > .btn:not(#zoomOutBtn):not(#zoomInBtn):not(#mobileToolsToggleBtn){display:none!important;}
+  body.mobileToolsOpen #topbar{overflow-y:auto!important;overscroll-behavior-y:contain;touch-action:pan-y!important;background:transparent;}
+  body.mobileToolsOpen #topbar .top-actions{display:grid!important;grid-template-columns:minmax(0,1fr) 40px 40px 66px;gap:6px!important;align-items:center;align-content:start;max-height:none;overflow:visible!important;padding:6px!important;}
+  body.mobileToolsOpen #topbar .searchWrap{grid-column:1!important;grid-row:1!important;}
+  body.mobileToolsOpen #topbar #zoomOutBtn{grid-column:2;grid-row:1;}
+  body.mobileToolsOpen #topbar #zoomInBtn{grid-column:3;grid-row:1;}
+  body.mobileToolsOpen #topbar #mobileToolsToggleBtn{grid-column:4;grid-row:1;}
+  body.mobileToolsOpen #topbar .top-actions > .btn:not(#zoomOutBtn):not(#zoomInBtn):not(#mobileToolsToggleBtn){display:flex!important;align-items:center;justify-content:center;grid-column:span 2;min-width:0!important;width:100%!important;white-space:normal;min-height:43px!important;padding:9px 5px!important;font-size:13px!important;order:5!important;}
+  body.mobileToolsOpen #topbar #panelToggleBtn{display:none!important;}
+  .mobileDock{position:fixed;z-index:65;bottom:0;left:0;right:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:7px max(8px,env(safe-area-inset-right,0px)) calc(7px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));min-height:var(--mobile-bottom);background:rgba(11,20,24,.97);border-top:1px solid #536962;box-shadow:0 -5px 20px rgba(0,0,0,.38);}
+  .mobileDock button{border:1px solid #58716e;border-radius:10px;background:#1b2c32;color:#f4e8cf;min-width:0;min-height:43px;font-size:13px;font-weight:750;padding:8px 2px;touch-action:manipulation;}
+  .mobileDock button.active,.mobileDock button[aria-expanded=true],.mobileDock button[aria-pressed=true]{border-color:#e6c681;background:#453922;color:#fff0c8;}
+  #collapse{display:none!important;}
+  #leftpanel{position:fixed!important;z-index:51!important;display:none!important;left:6px!important;right:6px!important;top:var(--mobile-top)!important;bottom:calc(var(--mobile-bottom) + 5px)!important;width:auto!important;height:auto!important;max-height:none!important;overflow-y:auto!important;overflow-x:hidden!important;overscroll-behavior:contain!important;padding:3px 2px 8px!important;gap:6px!important;transform:none!important;opacity:1!important;pointer-events:auto!important;border-radius:12px;background:rgba(11,20,24,.96)!important;box-shadow:0 9px 30px rgba(0,0,0,.5);}
+  body.showPanel #leftpanel{display:flex!important;}
+  body.showPanel #leftpanel>*{pointer-events:auto!important;}
+  #leftpanel > .mapCreator{flex:none;}
+  #leftpanel > .coordPanel{height:auto!important;min-height:0!important;flex:0 0 auto!important;overflow:visible!important;}
+  #leftpanel > #info{height:auto!important;min-height:0!important;max-height:none!important;flex:0 0 auto!important;overflow:visible!important;}
+  #leftpanel > .counterPanel{height:auto!important;min-height:0!important;max-height:none!important;flex:0 0 auto!important;}
+  #leftpanel #info .cityStatsFormGrid input{font-size:16px!important;}
+  #hud{bottom:calc(var(--mobile-bottom) + 7px)!important;max-width:calc(100vw - 20px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 9px!important;font-size:11px!important;}
+  #resourceLegend.resourceLegend[open]{position:fixed!important;z-index:57!important;left:6px!important;right:6px!important;top:var(--mobile-top)!important;bottom:calc(var(--mobile-bottom) + 6px)!important;width:auto!important;max-height:none!important;overflow-y:auto!important;overscroll-behavior:contain;}
+  .markerLegendPanel:not([hidden]){position:fixed!important;z-index:58!important;top:var(--mobile-top)!important;left:6px!important;right:6px!important;bottom:auto!important;width:auto!important;max-height:calc(100dvh - var(--mobile-top) - var(--mobile-bottom) - 8px)!important;overflow-y:auto!important;}
+  .routePanel,.moveCalcPanel{position:fixed!important;z-index:52!important;left:6px!important;right:6px!important;bottom:calc(var(--mobile-bottom) + 6px)!important;top:auto!important;width:auto!important;max-width:none!important;max-height:calc(100dvh - var(--mobile-top) - var(--mobile-bottom) - 10px)!important;overflow-y:auto!important;overscroll-behavior:contain;}
+  .scorePanel,.landExportPanel,.steelPanel{position:fixed!important;z-index:52!important;top:var(--mobile-top)!important;left:6px!important;right:6px!important;bottom:auto!important;width:auto!important;max-width:none!important;max-height:calc(100dvh - var(--mobile-top) - var(--mobile-bottom) - 8px)!important;overscroll-behavior:contain;}
+  body.steelPicking .steelPanel{top:var(--mobile-top)!important;max-height:calc(100dvh - var(--mobile-top) - var(--mobile-bottom) - 8px)!important;}
+  .searchResults{position:fixed!important;z-index:70!important;top:var(--mobile-top)!important;left:6px!important;right:6px!important;width:auto!important;max-height:calc(100dvh - var(--mobile-top) - var(--mobile-bottom) - 8px)!important;overflow-y:auto!important;}
+  .coord input,.routeInputGrid input,.steelPanel input,.scorePanel input,.landExportPanel input,.moveCalcPanel input{font-size:16px!important;}
+  #leftpanel button,.routePanel button,.moveCalcPanel button,.scorePanel button,.landExportPanel button,.steelPanel button,.resourceLegend button,.markerLegendPanel button{touch-action:manipulation;}
+  .routePanel button,.moveCalcPanel button,.scorePanelHead button,.landExportHead button,.steelPanelHead button{min-height:38px;}
+}
+@media(max-width:390px){
+ #topbar #zoomOutBtn,#topbar #zoomInBtn{min-width:36px!important;width:36px!important;}
+ #topbar .top-actions > #mobileToolsToggleBtn{min-width:58px!important;width:58px!important;font-size:11px!important;}
+ body.mobileToolsOpen #topbar .top-actions{grid-template-columns:minmax(0,1fr) 36px 36px 58px;}
+ .mobileDock{gap:4px;padding-left:5px;padding-right:5px;}
+ .mobileDock button{font-size:12px;}
+}
+@media(max-width:900px) and (max-height:480px){
+ :root{--mobile-top:calc(53px + env(safe-area-inset-top,0px));--mobile-bottom:calc(55px + env(safe-area-inset-bottom,0px));}
+ .mobileDock{padding-top:4px;padding-bottom:calc(4px + env(safe-area-inset-bottom,0px));}
+ .mobileDock button{min-height:39px;}
+ #topbar .top-actions,#topbar #search{min-height:38px!important;}
+}

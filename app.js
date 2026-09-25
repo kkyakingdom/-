@@ -3620,7 +3620,75 @@ function scheduleSelectionDraw(clientX,clientY){
   });
 }
 
+// Mobile two-pointer pinch zoom. Keep the original wheel/drag compositor pipeline:
+// this path changes only viewport transform and commits one precise render after
+// the gesture ends; no per-touch full-canvas redraw or synthetic wheel events.
+const activeMapTouches=new Map();
+const pinchConsumedPointers=new Set();
+let pinchGesture=null,pinchMoveRAF=0;
+function pinchPoints(gesture){
+  const a=activeMapTouches.get(gesture.ids[0]),b=activeMapTouches.get(gesture.ids[1]);
+  if(!a||!b)return null;
+  return {x:(a.x+b.x)/2,y:(a.y+b.y)/2,distance:Math.max(1,Math.hypot(b.x-a.x,b.y-a.y))};
+}
+function startMapPinch(){
+  if(pinchGesture||pinchConsumedPointers.size||activeMapTouches.size!==2)return;
+  // One-finger drag and a pending drag-cache commit must finish before zoom.
+  if(dragging||dragCommitActive){
+    finishDragPreview();
+    dragging=false;moved=false;
+    draw();
+  }
+  if(zoomPreviewActive)commitPreview();
+  const ids=[...activeMapTouches.keys()];
+  const a=activeMapTouches.get(ids[0]),b=activeMapTouches.get(ids[1]);
+  const rect=map.parentElement.getBoundingClientRect();
+  const cx=(a.x+b.x)/2-rect.left,cy=(a.y+b.y)/2-rect.top;
+  pinchGesture={ids,startDistance:Math.max(1,Math.hypot(a.x-b.x,a.y-b.y)),
+    startScale:scale,world:screenToWorld(cx,cy)};
+  for(const id of ids)pinchConsumedPointers.add(id);
+  cancelPreviewFrame();cancelZoomCacheJob();
+  if(zoomCommitTimer){clearTimeout(zoomCommitTimer);zoomCommitTimer=0;}
+  wheelBaseScale=scale;wheelBaseOx=ox;wheelBaseOy=oy;
+  // Surrounding terrain remains visible when pinching out.
+  attachWheelUnderlay();
+  for(const canvas of wheelLayers){canvas.style.transformOrigin='0 0';canvas.style.willChange='transform';}
+  zoomPreviewActive=true;
+}
+function paintMapPinch(){
+  pinchMoveRAF=0;
+  if(!pinchGesture)return;
+  const pos=pinchPoints(pinchGesture);
+  if(!pos)return;
+  const rect=map.parentElement.getBoundingClientRect();
+  const px=pos.x-rect.left,py=pos.y-rect.top;
+  const nextScale=Math.max(.12,Math.min(MAX_SCALE,pinchGesture.startScale*pos.distance/pinchGesture.startDistance));
+  const [wx,wy]=pinchGesture.world;
+  scale=nextScale;
+  const dx=(wx-CX)*scale*FLIP_X,dy=(wy-CY)*scale;
+  ox=px-(CX*scale+dx*COS-dy*SIN);
+  oy=py-(CY*scale+dx*SIN+dy*COS);
+  // Reuse the low-cost CSS raster transform used by desktop wheel zoom.
+  setWheelLayerTransform();
+}
+function endMapPinch(){
+  if(!pinchGesture)return;
+  if(pinchMoveRAF){cancelAnimationFrame(pinchMoveRAF);pinchMoveRAF=0;paintMapPinch();}
+  pinchGesture=null;
+  dragging=false;moved=false;
+  if(zoomCommitTimer)clearTimeout(zoomCommitTimer);
+  zoomCommitTimer=setTimeout(prepareWheelCommit,85);
+}
 map.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch'){
+    activeMapTouches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(activeMapTouches.size>=2){
+      try{map.setPointerCapture(e.pointerId);}catch(_){}
+      startMapPinch();
+      return;
+    }
+    if(pinchConsumedPointers.size)return;
+  }
   if(dragCommitActive){finishDragPreview();draw();}
   if(zoomPreviewActive) commitPreview();
   finishDragPreview();
@@ -3632,6 +3700,14 @@ map.addEventListener('pointerdown',e=>{
   map.setPointerCapture(e.pointerId);
 });
 map.addEventListener('pointermove',e=>{
+  if(e.pointerType==='touch'){
+    if(activeMapTouches.has(e.pointerId))activeMapTouches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pinchGesture){
+      if(!pinchMoveRAF)pinchMoveRAF=requestAnimationFrame(paintMapPinch);
+      return;
+    }
+    if(pinchConsumedPointers.has(e.pointerId))return;
+  }
   if(dragging){
     const dx=e.clientX-dragStartX, dy=e.clientY-dragStartY;
     if(Math.abs(dx)+Math.abs(dy)>2) moved=true;
@@ -3654,6 +3730,16 @@ map.addEventListener('pointermove',e=>{
   scheduleSelectionDraw(e.clientX,e.clientY);
 });
 map.addEventListener('pointerup',e=>{
+  if(e.pointerType==='touch'){
+    activeMapTouches.delete(e.pointerId);
+    const wasPinchPointer=!!pinchGesture?.ids.includes(e.pointerId);
+    if(wasPinchPointer)endMapPinch();
+    if(pinchConsumedPointers.delete(e.pointerId)||wasPinchPointer||pinchGesture){
+      // Never treat the release of either pinch finger as a map click.
+      dragging=false;
+      return;
+    }
+  }
   // A real pan is finished as soon as the button is released. If precise
   // terrain is not yet cached, keep the compositor preview visible and finish
   // the remaining expensive passes over several frames (never in pointerup).
@@ -3735,11 +3821,29 @@ map.addEventListener('pointerup',e=>{
   }
   dragging=false;
 });
-map.addEventListener('pointercancel',()=>{ if(dragging){ finishDragPreview(); dragging=false; draw(); } });
+map.addEventListener('pointercancel',e=>{
+  if(e.pointerType==='touch'){
+    activeMapTouches.delete(e.pointerId);
+    if(pinchGesture?.ids.includes(e.pointerId))endMapPinch();
+    if(pinchConsumedPointers.delete(e.pointerId)||pinchGesture)return;
+  }
+  if(dragging){finishDragPreview();dragging=false;draw();}
+});
 // A missed pointerup (window focus loss or a lost capture) must never leave
 // the map in a permanently dragging state.
-map.addEventListener('lostpointercapture',()=>{if(dragging){finishDragPreview();dragging=false;draw();}});
-window.addEventListener('blur',()=>{if(dragging){finishDragPreview();dragging=false;draw();}});
+map.addEventListener('lostpointercapture',e=>{
+  if(e.pointerType==='touch'){
+    activeMapTouches.delete(e.pointerId);
+    if(pinchGesture?.ids.includes(e.pointerId))endMapPinch();
+    if(pinchConsumedPointers.delete(e.pointerId)||pinchGesture)return;
+  }
+  if(dragging){finishDragPreview();dragging=false;draw();}
+});
+window.addEventListener('blur',()=>{
+  if(pinchGesture)endMapPinch();
+  activeMapTouches.clear();pinchConsumedPointers.clear();
+  if(dragging){finishDragPreview();dragging=false;draw();}
+});
 map.addEventListener('pointerleave',hideHoverTileInfo);
 map.addEventListener('dblclick',e=>{
   e.preventDefault();
