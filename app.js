@@ -354,17 +354,59 @@ function landExportRows(){
   return rows;
 }
 function xmlEsc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');}
+function xlsxColName(n){let s='';for(n++;n>0;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;}
+const XLSX_CRC_TABLE=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c>>>0;}return t;})();
+function xlsxCrc32(bytes){let c=0xFFFFFFFF;for(let i=0;i<bytes.length;i++)c=XLSX_CRC_TABLE[(c^bytes[i])&255]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function xlsxU16(v){return new Uint8Array([v&255,(v>>>8)&255]);}
+function xlsxU32(v){return new Uint8Array([v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255]);}
+function xlsxConcat(parts){let n=0;for(const p of parts)n+=p.length;const out=new Uint8Array(n);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}return out;}
+function xlsxDosDateTime(d=new Date()){let year=Math.max(1980,d.getFullYear());return {time:((d.getHours()&31)<<11)|((d.getMinutes()&63)<<5)|((Math.floor(d.getSeconds()/2))&31),date:(((year-1980)&127)<<9)|(((d.getMonth()+1)&15)<<5)|(d.getDate()&31)};}
+function xlsxZipStore(entries){
+  const enc=new TextEncoder(),locals=[],centrals=[];let offset=0;const dt=xlsxDosDateTime();
+  for(const ent of entries){
+    const name=enc.encode(ent.name),data=typeof ent.data==='string'?enc.encode(ent.data):ent.data,crc=xlsxCrc32(data);
+    const local=xlsxConcat([xlsxU32(0x04034b50),xlsxU16(20),xlsxU16(0x0800),xlsxU16(0),xlsxU16(dt.time),xlsxU16(dt.date),xlsxU32(crc),xlsxU32(data.length),xlsxU32(data.length),xlsxU16(name.length),xlsxU16(0),name,data]);
+    locals.push(local);
+    const central=xlsxConcat([xlsxU32(0x02014b50),xlsxU16(20),xlsxU16(20),xlsxU16(0x0800),xlsxU16(0),xlsxU16(dt.time),xlsxU16(dt.date),xlsxU32(crc),xlsxU32(data.length),xlsxU32(data.length),xlsxU16(name.length),xlsxU16(0),xlsxU16(0),xlsxU16(0),xlsxU16(0),xlsxU32(0),xlsxU32(offset),name]);
+    centrals.push(central);offset+=local.length;
+  }
+  const central=xlsxConcat(centrals),local=xlsxConcat(locals);
+  const end=xlsxConcat([xlsxU32(0x06054b50),xlsxU16(0),xlsxU16(0),xlsxU16(entries.length),xlsxU16(entries.length),xlsxU32(central.length),xlsxU32(local.length),xlsxU16(0)]);
+  return xlsxConcat([local,central,end]);
+}
+function buildLandExportXlsx(rows){
+  const headers=['주','군','성지','레벨','자원','좌표'];
+  const all=[headers,...rows],sheetRows=all.map((row,ri)=>{
+    const cells=row.map((v,ci)=>{
+      const ref=`${xlsxColName(ci)}${ri+1}`;
+      if(ri>0&&ci===3&&Number.isFinite(Number(v)))return `<c r="${ref}"><v>${Number(v)}</v></c>`;
+      const style=ri===0?' s="1"':'';
+      return `<c r="${ref}" t="inlineStr"${style}><is><t>${xmlEsc(v)}</t></is></c>`;
+    }).join('');
+    return `<row r="${ri+1}">${cells}</row>`;
+  }).join('');
+  const lastRow=all.length;
+  const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" width="12" customWidth="1"/><col min="2" max="2" width="14" customWidth="1"/><col min="3" max="3" width="18" customWidth="1"/><col min="4" max="4" width="9" customWidth="1"/><col min="5" max="5" width="13" customWidth="1"/><col min="6" max="6" width="15" customWidth="1"/></cols><sheetData>${sheetRows}</sheetData><autoFilter ref="A1:F${lastRow}"/></worksheet>`;
+  const styles=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="10"/><name val="맑은 고딕"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8DFC7"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+  const workbook=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="토지 추출" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  const workbookRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const rootRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+  const types=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  return xlsxZipStore([
+    {name:'[Content_Types].xml',data:types},{name:'_rels/.rels',data:rootRels},{name:'xl/workbook.xml',data:workbook},{name:'xl/_rels/workbook.xml.rels',data:workbookRels},{name:'xl/worksheets/sheet1.xml',data:sheet},{name:'xl/styles.xml',data:styles}
+  ]);
+}
 function downloadLandExportExcel(){
   if(!landExportCities.size){setLandExportStatus('성지를 1곳 이상 선택하세요.','error');return;}
   const levels=landExportSelectedLevels();if(!levels.size){setLandExportStatus('추출할 토지 레벨을 선택하세요.','error');return;}
   const rows=landExportRows();if(!rows.length){setLandExportStatus('조건에 맞는 자원 토지가 없습니다.','error');return;}
-  const headers=['주','군','성지 이름','레벨','자원 종류','좌표'];
-  const rowXml=(row,head=false)=>'<Row>'+row.map((v,i)=>`<Cell${head?' ss:StyleID="Header"':''}><Data ss:Type="${(!head&&i===3)?'Number':'String'}">${xmlEsc(v)}</Data></Cell>`).join('')+'</Row>';
-  const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="맑은 고딕" ss:Size="10"/></Style><Style ss:ID="Header"><Font ss:Bold="1"/><Interior ss:Color="#E8DFC7" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/></Style></Styles><Worksheet ss:Name="토지 추출"><Table><Column ss:Width="70"/><Column ss:Width="80"/><Column ss:Width="95"/><Column ss:Width="45"/><Column ss:Width="70"/><Column ss:Width="75"/>${rowXml(headers,true)}${rows.map(r=>rowXml(r,false)).join('')}</Table><AutoFilter x:Range="R1C1:R${rows.length+1}C6" xmlns="urn:schemas-microsoft-com:office:excel"/></Worksheet></Workbook>`;
-  const blob=new Blob(['\ufeff',xml],{type:'application/vnd.ms-excel;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
-  const d=new Date(),stamp=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
-  a.href=url;a.download=`Scenario11_토지추출_${stamp}.xls`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
-  setLandExportStatus(`${rows.length.toLocaleString()}개 토지를 엑셀로 추출했습니다.`,'done');
+  try{
+    const bytes=buildLandExportXlsx(rows);
+    const blob=new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    const d=new Date(),stamp=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+    a.href=url;a.download=`Scenario11_토지추출_${stamp}.xlsx`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
+    setLandExportStatus(`${rows.length.toLocaleString()}개 토지를 XLSX로 추출했습니다.`,'done');
+  }catch(err){console.error(err);setLandExportStatus(`XLSX 생성 실패: ${err?.message||err}`,'error');}
 }
 
 const regionEntries=Object.entries(R);
